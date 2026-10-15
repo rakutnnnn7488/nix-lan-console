@@ -21,3 +21,6 @@ Release 标签使用 `v1.4.3.0` 等四段版本号；附加同版本的 `Control
 1.4.5.0：同一角色单实例运行；通过主机进程标识判断真正的新启动；副机复用已有 Edge 窗口并清理重复窗口。
 v1.4.6.0: Exclude Wallpaper Engine; Start opens settings for game records and updates.
 
+1.4.6.1：Webcam 预览改用本地游戏副本提取的原生房间与侧栏素材。素材未纳入公开源码或公开发布包。`build.ps1 -GameAssetsDir <本地素材目录>` 可用于本地完整构建。
+
+1.4.6.2：按游戏窗口边框切片调整四个窗口的边框和内容区；加入最小化、最大化、关闭、拖动、缩放与任务栏还原。公开 Release 仅含程序更新；本地游戏素材由完整安装包保留。

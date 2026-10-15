@@ -350,7 +350,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.6.0"; }
+    internal static class BuildInfo { public const string Version = "1.4.6.2"; }
 
     internal static class DisplayServer
     {
@@ -846,4 +846,3 @@ namespace NixLanConsole
         protected override void ExitThreadCore() { Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
     }
 }
-
