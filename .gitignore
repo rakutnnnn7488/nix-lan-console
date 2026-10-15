@@ -1,0 +1,12 @@
+# Local builds and game resources
+*.exe
+*.zip
+*.png
+*.gif
+*.jpg
+game-assets/
+outputs/
+work/
+*.log
+build/
+
