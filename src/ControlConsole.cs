@@ -24,8 +24,20 @@ namespace NixLanConsole
         {
             try
             {
-                if (args.Length > 0 && args[0] == "--sensor") { HostSensor.Run(); return; }
-                if (args.Length > 0 && args[0] == "--display") { DisplayServer.Run(); return; }
+                if (args.Length > 0 && args[0] == "--sensor")
+                {
+                    bool created;
+                    using (var mutex = new Mutex(true, "Local\\NixLanConsole.Host", out created))
+                        if (created) HostSensor.Run();
+                    return;
+                }
+                if (args.Length > 0 && args[0] == "--display")
+                {
+                    bool created;
+                    using (var mutex = new Mutex(true, "Local\\NixLanConsole.Display", out created))
+                        if (created) DisplayServer.Run();
+                    return;
+                }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new RolePicker());
@@ -92,6 +104,7 @@ namespace NixLanConsole
     internal sealed class MetricPacket
     {
         public string host;
+        public string bootId;
         public long utc;
         public double cpu;
         public double memoryUsed;
@@ -107,6 +120,7 @@ namespace NixLanConsole
         private const int Port = 46701;
         private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+        private static readonly string BootId = Guid.NewGuid().ToString("N");
         private static PerformanceCounter CpuCounter;
         private static double GpuTemperature = -1;
         private static double CpuTemperature = -1;
@@ -131,7 +145,7 @@ namespace NixLanConsole
                 udp.EnableBroadcast = true;
                 while (true)
                 {
-                    var p = new MetricPacket { host = Environment.MachineName, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames() };
+                    var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames() };
                     ReadMemory(out p.memoryUsed, out p.memoryTotal);
                     if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 5) { ReadTemperatures(); LastTemperatureRead = DateTime.UtcNow; }
                     p.cpuTemp = CpuTemperature; p.gpuTemp = GpuTemperature;
@@ -280,7 +294,7 @@ namespace NixLanConsole
         public GameSession[] sessions;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.4.0"; }
+    internal static class BuildInfo { public const string Version = "1.4.5.0"; }
 
     internal static class DisplayServer
     {
@@ -298,6 +312,7 @@ namespace NixLanConsole
         private static long EventId;
         private static string Role = "ame";
         private static Process Browser;
+        private static DateTime LastBrowserLaunch = DateTime.MinValue;
         private static TrayContext Tray;
         private static System.Threading.Timer UpdateTimer;
         private static int UpdateStarted;
@@ -452,7 +467,7 @@ namespace NixLanConsole
         }
         private static void Update(MetricPacket p)
         {
-            bool wasOffline = LastSeen == DateTime.MinValue || (DateTime.UtcNow - LastSeen).TotalSeconds > 5;
+            bool openForNewHost = ShouldOpenForHost(Last, p, DateTime.UtcNow - LastSeen);
             Last = p; LastSeen = DateTime.UtcNow;
             var current = new HashSet<string>(p.games ?? new string[0], StringComparer.OrdinalIgnoreCase);
             foreach (string name in current)
@@ -475,9 +490,12 @@ namespace NixLanConsole
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt && ActiveSessions.Count == 0) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
             }
             AnyGame = running;
-            if (wasOffline) UserClosed = false;
-            if (!UserClosed && wasOffline) { LaunchBrowser(); RestoreBrowser(); }
+            if (openForNewHost && !UserClosed) RestoreBrowser();
             SaveSessions();
+        }
+        private static bool ShouldOpenForHost(MetricPacket previous, MetricPacket current, TimeSpan gap)
+        {
+            return previous == null || (!String.IsNullOrEmpty(current.bootId) && !String.Equals(previous.bootId, current.bootId, StringComparison.Ordinal)) || (String.IsNullOrEmpty(current.bootId) && gap.TotalSeconds > 30);
         }
         private static void BeginTransformation()
         {
@@ -579,27 +597,50 @@ namespace NixLanConsole
         private static void SaveSessions() { try { File.WriteAllText(SessionFile, Json.Serialize(Sessions.Take(1000).ToArray()), Encoding.UTF8); } catch { } }
         private static void LaunchBrowser()
         {
-            if (Browser != null && !Browser.HasExited) return;
+            if (FindConsoleWindows().Count > 0 || (DateTime.UtcNow - LastBrowserLaunch).TotalSeconds < 10) return;
             string[] paths = { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe") };
             string edge = paths.FirstOrDefault(File.Exists); if (edge == null) return;
-            try { Browser = Process.Start(new ProcessStartInfo(edge, "--app=http://127.0.0.1:" + HttpPort + "/ --start-fullscreen --no-first-run") { UseShellExecute = false, CreateNoWindow = true }); } catch { }
+            try { LastBrowserLaunch = DateTime.UtcNow; Browser = Process.Start(new ProcessStartInfo(edge, "--app=http://127.0.0.1:" + HttpPort + "/ --start-fullscreen --no-first-run") { UseShellExecute = false, CreateNoWindow = true }); } catch { LastBrowserLaunch = DateTime.MinValue; }
         }
-        private static void RestoreBrowser() { try { LaunchBrowser(); IntPtr h = FindConsoleWindow(); if (h != IntPtr.Zero) { ShowWindow(h, 9); SetForegroundWindow(h); } } catch { } }
-        private static void MinimizeBrowser() { try { IntPtr h = FindConsoleWindow(); if (h != IntPtr.Zero) ShowWindow(h, 6); } catch { } }
-        private static void CloseBrowser() { try { IntPtr h = FindConsoleWindow(); if (h != IntPtr.Zero) PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); } catch { } }
-        private static IntPtr FindConsoleWindow()
+        private static void RestoreBrowser()
         {
-            IntPtr found = IntPtr.Zero;
+            try
+            {
+                var windows = FindConsoleWindows();
+                if (windows.Count > 0) { NormalizeBrowserWindows(windows, true); return; }
+                LaunchBrowser();
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    Thread.Sleep(1500);
+                    try { NormalizeBrowserWindows(FindConsoleWindows(), false); } catch { }
+                });
+            }
+            catch { }
+        }
+        private static void NormalizeBrowserWindows(List<IntPtr> windows, bool activate)
+        {
+            if (windows.Count == 0) return;
+            IntPtr keep = windows[0];
+            foreach (IntPtr extra in windows.Skip(1)) PostMessage(extra, 0x0010, IntPtr.Zero, IntPtr.Zero);
+            if (activate && IsIconic(keep)) ShowWindow(keep, 9);
+            if (activate) SetForegroundWindow(keep);
+        }
+        private static void MinimizeBrowser() { try { foreach (IntPtr h in FindConsoleWindows()) ShowWindow(h, 6); } catch { } }
+        private static void CloseBrowser() { try { foreach (IntPtr h in FindConsoleWindows()) PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); } catch { } }
+        private static List<IntPtr> FindConsoleWindows()
+        {
+            var found = new List<IntPtr>();
             EnumWindows(delegate(IntPtr h, IntPtr l)
             {
                 int pid; GetWindowThreadProcessId(h, out pid); if (pid == 0) return true;
                 try { using (var p = Process.GetProcessById(pid)) { if (!String.Equals(p.ProcessName, "msedge", StringComparison.OrdinalIgnoreCase)) return true; } } catch { return true; }
                 var title = new StringBuilder(512); GetWindowText(h, title, title.Capacity);
-                if (title.ToString().IndexOf("副机控制台", StringComparison.OrdinalIgnoreCase) >= 0 || title.ToString().IndexOf("游戏界面还原稿", StringComparison.OrdinalIgnoreCase) >= 0) { found = h; return false; }
+                if (title.ToString().IndexOf("副机控制台", StringComparison.OrdinalIgnoreCase) >= 0 || title.ToString().IndexOf("游戏界面还原稿", StringComparison.OrdinalIgnoreCase) >= 0) found.Add(h);
                 return true;
             }, IntPtr.Zero);
             return found;
         }
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
