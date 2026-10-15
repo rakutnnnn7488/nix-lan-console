@@ -350,7 +350,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.6.4"; }
+    internal static class BuildInfo { public const string Version = "1.4.6.5"; }
 
     internal static class DisplayServer
     {
@@ -505,7 +505,8 @@ namespace NixLanConsole
                                 downloadClient.DownloadProgressChanged += delegate(object sender, DownloadProgressChangedEventArgs e)
                                 {
                                     string amount = e.TotalBytesToReceive > 0 ? e.ProgressPercentage + "%" : (e.BytesReceived / 1048576d).ToString("F1") + " MB";
-                                    SetUpdateProgress("downloading", e.ProgressPercentage, version.ToString(), "正在下载更新包… " + amount);
+                                    int percent = e.TotalBytesToReceive > 0 ? e.ProgressPercentage : -1;
+                                    SetUpdateProgress("downloading", percent, version.ToString(), "正在下载更新包… " + amount);
                                 };
                                 downloadClient.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; done.Set(); };
                                 downloadClient.DownloadFileAsync(url, temp);
