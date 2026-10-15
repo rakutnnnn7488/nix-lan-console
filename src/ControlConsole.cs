@@ -105,6 +105,7 @@ namespace NixLanConsole
     {
         public string host;
         public string bootId;
+        public string version;
         public long utc;
         public double cpu;
         public double memoryUsed;
@@ -113,6 +114,20 @@ namespace NixLanConsole
         public double cpuTemp;
         public double gpuTemp;
         public string[] games;
+        public string[] catalog;
+    }
+
+    internal sealed class ControlPacket
+    {
+        public string[] excludedGames;
+        public bool hostAutoUpdate = true;
+    }
+
+    internal sealed class ConsoleSettings
+    {
+        public bool autoUpdate = true;
+        public bool hostAutoUpdate = true;
+        public string[] excludedGames = new[] { "Wallpaper Engine" };
     }
 
     internal static class HostSensor
@@ -128,9 +143,13 @@ namespace NixLanConsole
         private static DateTime LastGameConfigRead = DateTime.MinValue;
         private static readonly Dictionary<string, string> GameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> CustomGameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object ControlGate = new object();
+        private static HashSet<string> RemoteExcludedGames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static volatile bool RemoteAutoUpdate = true;
         private static System.Threading.Timer UpdateTimer;
         private static volatile bool GameRunning;
         internal static bool HasGameRunning { get { return GameRunning; } }
+        internal static bool AutoUpdateEnabled { get { return RemoteAutoUpdate; } }
 
         public static void Run()
         {
@@ -145,15 +164,42 @@ namespace NixLanConsole
                 udp.EnableBroadcast = true;
                 while (true)
                 {
-                    var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames() };
+                    var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames(), catalog = GetGameCatalog() };
                     ReadMemory(out p.memoryUsed, out p.memoryTotal);
                     if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 5) { ReadTemperatures(); LastTemperatureRead = DateTime.UtcNow; }
                     p.cpuTemp = CpuTemperature; p.gpuTemp = GpuTemperature;
                     byte[] bytes = Encoding.UTF8.GetBytes(Json.Serialize(p));
                     try { udp.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, Port)); } catch { }
+                    ReadControl(udp);
                     Thread.Sleep(1000);
                 }
             }
+        }
+        private static void ReadControl(UdpClient udp)
+        {
+            try
+            {
+                while (udp.Available > 0)
+                {
+                    IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] bytes = udp.Receive(ref remote);
+                    if (bytes.Length > 8192) continue;
+                    var packet = Json.Deserialize<ControlPacket>(Encoding.UTF8.GetString(bytes));
+                    if (packet == null) continue;
+                    lock (ControlGate) RemoteExcludedGames = new HashSet<string>((packet.excludedGames ?? new string[0]).Where(x => !String.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
+                    RemoteAutoUpdate = packet.hostAutoUpdate;
+                }
+            }
+            catch { }
+        }
+        private static bool IsSystemUtility(string path, string title)
+        {
+            string exe = Path.GetFileNameWithoutExtension(path);
+            return String.Equals(title, "Wallpaper Engine", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(exe, @"\Awallpaper(32|64)?\z", RegexOptions.IgnoreCase);
+        }
+        private static string[] GetGameCatalog()
+        {
+            return GameExecutables.Concat(CustomGameExecutables).Where(x => !IsSystemUtility(x.Key, x.Value)).Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray();
         }
         private static void StartTray()
         {
@@ -193,13 +239,15 @@ namespace NixLanConsole
         {
             LoadCustomGames();
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> excluded;
+            lock (ControlGate) excluded = new HashSet<string>(RemoteExcludedGames, StringComparer.OrdinalIgnoreCase);
             foreach (var p in Process.GetProcesses())
             {
                 try
                 {
                     string path = Path.GetFullPath(p.MainModule.FileName);
                     string title;
-                    if (CustomGameExecutables.TryGetValue(path, out title) || GameExecutables.TryGetValue(path, out title)) names.Add(title);
+                    if ((CustomGameExecutables.TryGetValue(path, out title) || GameExecutables.TryGetValue(path, out title)) && !IsSystemUtility(path, title) && !excluded.Contains(title)) names.Add(title);
                 }
                 catch { }
                 finally { p.Dispose(); }
@@ -239,6 +287,8 @@ namespace NixLanConsole
                     string manifests = Path.Combine(Directory.GetParent(root).FullName, "appmanifest_*.acf");
                     foreach (string file in Directory.GetFiles(Path.GetDirectoryName(manifests), Path.GetFileName(manifests)))
                     {
+                        string appId = Regex.Match(Path.GetFileName(file), @"appmanifest_(\d+)\.acf", RegexOptions.IgnoreCase).Groups[1].Value;
+                        if (appId == "431960" || appId == "1812620" || appId == "228980") continue;
                         string data = File.ReadAllText(file); var im = Regex.Match(data, "\\\"name\\\"\\s+\\\"([^\\\"]+)\\\""); var dm = Regex.Match(data, "\\\"installdir\\\"\\s+\\\"([^\\\"]+)\\\"");
                         if (!im.Success || !dm.Success) continue;
                         string dir = Path.Combine(root, dm.Groups[1].Value); if (!Directory.Exists(dir)) continue;
@@ -292,9 +342,15 @@ namespace NixLanConsole
         public long roleEvent;
         public long returnInSeconds;
         public GameSession[] sessions;
+        public string version;
+        public string hostVersion;
+        public string[] knownGames;
+        public string[] excludedGames;
+        public bool autoUpdate;
+        public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.5.0"; }
+    internal static class BuildInfo { public const string Version = "1.4.6.0"; }
 
     internal static class DisplayServer
     {
@@ -304,6 +360,8 @@ namespace NixLanConsole
         private static readonly object Gate = new object();
         private static readonly List<GameSession> Sessions = new List<GameSession>();
         private static readonly Dictionary<string, GameSession> ActiveSessions = new Dictionary<string, GameSession>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> KnownGames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static ConsoleSettings Settings = new ConsoleSettings();
         private static MetricPacket Last;
         private static DateTime LastSeen = DateTime.MinValue;
         private static bool AnyGame;
@@ -321,7 +379,7 @@ namespace NixLanConsole
 
         public static void Run()
         {
-            Directory.CreateDirectory(DataDir); LoadSessions();
+            Directory.CreateDirectory(DataDir); LoadSettings(); LoadSessions();
             UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
             var trayThread = new Thread(new ThreadStart(delegate { Tray = new TrayContext(); Application.Run(Tray); })) { IsBackground = true, Name = "Console tray" };
             trayThread.SetApartmentState(ApartmentState.STA); trayThread.Start();
@@ -335,8 +393,8 @@ namespace NixLanConsole
             try
             {
                 bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal);
-                if (hostMode) { if (HostSensor.HasGameRunning) return; }
-                else { lock (Gate) if (ActiveSessions.Count > 0) return; }
+                if (hostMode) { if (HostSensor.HasGameRunning || !HostSensor.AutoUpdateEnabled) return; }
+                else { lock (Gate) { if (ActiveSessions.Count > 0 || (!String.Equals(ignored as string, "--display-force", StringComparison.Ordinal) && !Settings.autoUpdate)) return; } }
                 string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 Version current; if (!Version.TryParse(BuildInfo.Version, out current)) return;
                 Version available = null; string sourceZip = null;
@@ -460,6 +518,9 @@ namespace NixLanConsole
                         MetricPacket p = Json.Deserialize<MetricPacket>(Encoding.UTF8.GetString(data));
                         if (p == null) continue;
                         lock (Gate) Update(p);
+                        byte[] reply;
+                        lock (Gate) reply = Encoding.UTF8.GetBytes(Json.Serialize(new ControlPacket { excludedGames = Settings.excludedGames, hostAutoUpdate = Settings.hostAutoUpdate }));
+                        try { udp.Send(reply, reply.Length, remote); } catch { }
                     }
                     catch { }
                 }
@@ -469,7 +530,11 @@ namespace NixLanConsole
         {
             bool openForNewHost = ShouldOpenForHost(Last, p, DateTime.UtcNow - LastSeen);
             Last = p; LastSeen = DateTime.UtcNow;
-            var current = new HashSet<string>(p.games ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            foreach (string name in p.catalog ?? new string[0]) if (!String.IsNullOrWhiteSpace(name)) KnownGames.Add(name);
+            foreach (string name in p.games ?? new string[0]) if (!String.IsNullOrWhiteSpace(name)) KnownGames.Add(name);
+            var excluded = new HashSet<string>(Settings.excludedGames ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            excluded.Add("Wallpaper Engine");
+            var current = new HashSet<string>((p.games ?? new string[0]).Where(x => !excluded.Contains(x)), StringComparer.OrdinalIgnoreCase);
             foreach (string name in current)
                 if (!ActiveSessions.ContainsKey(name))
                 {
@@ -505,7 +570,11 @@ namespace NixLanConsole
         {
             string path = c.Request.Url.AbsolutePath.Trim('/');
             if (path == "state") { WriteJson(c, Snapshot()); return; }
+            if (path == "settings") { EditSettings(c); return; }
+            if (path == "update/info") { WriteUpdateInfo(c); return; }
+            if (path == "update/install") { InstallUpdate(c); return; }
             if (path == "session/edit") { EditSession(c); return; }
+            if (path == "session/purge") { PurgeSessions(c); return; }
             if (path.StartsWith("window/", StringComparison.OrdinalIgnoreCase))
             {
                 string action = path.Substring("window/".Length);
@@ -553,6 +622,103 @@ namespace NixLanConsole
             }
             catch { c.Response.StatusCode = 400; c.Response.Close(); }
         }
+        private static string SettingsFile { get { return Path.Combine(DataDir, "settings.json"); } }
+        private static void LoadSettings()
+        {
+            try
+            {
+                if (File.Exists(SettingsFile)) Settings = Json.Deserialize<ConsoleSettings>(File.ReadAllText(SettingsFile)) ?? new ConsoleSettings();
+                var excluded = new HashSet<string>(Settings.excludedGames ?? new string[0], StringComparer.OrdinalIgnoreCase);
+                excluded.Add("Wallpaper Engine");
+                Settings.excludedGames = excluded.ToArray();
+            }
+            catch { Settings = new ConsoleSettings(); }
+        }
+        private static bool IsLocalJsonPost(HttpListenerContext c)
+        {
+            string origin = c.Request.Headers["Origin"];
+            return c.Request.HttpMethod == "POST" && !String.IsNullOrEmpty(c.Request.ContentType) && c.Request.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) && c.Request.ContentLength64 >= 0 && c.Request.ContentLength64 <= 16384 && (origin == null || origin == "http://127.0.0.1:" + HttpPort);
+        }
+        private static void EditSettings(HttpListenerContext c)
+        {
+            if (!IsLocalJsonPost(c)) { c.Response.StatusCode = 400; c.Response.Close(); return; }
+            try
+            {
+                string body; using (var reader = new StreamReader(c.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+                var proposed = Json.Deserialize<ConsoleSettings>(body);
+                if (proposed == null || proposed.excludedGames == null || proposed.excludedGames.Length > 256 || proposed.excludedGames.Any(x => String.IsNullOrWhiteSpace(x) || x.Length > 100)) throw new ArgumentException("设置内容无效");
+                var excluded = new HashSet<string>(proposed.excludedGames, StringComparer.OrdinalIgnoreCase); excluded.Add("Wallpaper Engine");
+                proposed.excludedGames = excluded.ToArray();
+                lock (Gate) { Settings = proposed; File.WriteAllText(SettingsFile, Json.Serialize(Settings), Encoding.UTF8); }
+                c.Response.StatusCode = 204; c.Response.Close();
+            }
+            catch { c.Response.StatusCode = 400; c.Response.Close(); }
+        }
+        private static void PurgeSessions(HttpListenerContext c)
+        {
+            if (!IsLocalJsonPost(c)) { c.Response.StatusCode = 400; c.Response.Close(); return; }
+            try
+            {
+                string body; using (var reader = new StreamReader(c.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+                var request = Json.Deserialize<Dictionary<string, object>>(body);
+                string game = Convert.ToString(request["game"]).Trim();
+                if (game.Length == 0 || game.Length > 100) throw new ArgumentException("游戏名称无效");
+                lock (Gate)
+                {
+                    if (ActiveSessions.ContainsKey(game)) { c.Response.StatusCode = 409; c.Response.Close(); return; }
+                    if (File.Exists(SessionFile)) File.Copy(SessionFile, Path.Combine(DataDir, "sessions-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json"), true);
+                    Sessions.RemoveAll(s => String.Equals(s.game, game, StringComparison.OrdinalIgnoreCase));
+                    SaveSessions();
+                }
+                c.Response.StatusCode = 204; c.Response.Close();
+            }
+            catch { c.Response.StatusCode = 400; c.Response.Close(); }
+        }
+        private static string LatestReleaseVersion()
+        {
+            string config = Path.Combine(BaseDir, "update-source.txt");
+            if (!File.Exists(config)) throw new FileNotFoundException("未配置 GitHub 更新地址");
+            string repository = File.ReadAllText(config, Encoding.UTF8).Trim();
+            if (!Regex.IsMatch(repository, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")) throw new ArgumentException("GitHub 更新地址无效");
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+            var request = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/" + repository + "/releases/latest");
+            request.UserAgent = "NixLanConsole/" + BuildInfo.Version;
+            request.Accept = "application/vnd.github+json";
+            request.Timeout = 8000;
+            using (var response = request.GetResponse()) using (var reader = new StreamReader(response.GetResponseStream()))
+            {
+                var release = Json.Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
+                return Convert.ToString(release["tag_name"]).TrimStart('v', 'V');
+            }
+        }
+        private static void WriteUpdateInfo(HttpListenerContext c)
+        {
+            try
+            {
+                string latest = LatestReleaseVersion();
+                Version newest, current;
+                bool available = Version.TryParse(latest, out newest) && Version.TryParse(BuildInfo.Version, out current) && newest > current;
+                string hostVersion; lock (Gate) hostVersion = Last == null ? null : Last.version;
+                Version hostInstalled;
+                bool hostAvailable = Version.TryParse(latest, out newest) && Version.TryParse(hostVersion, out hostInstalled) && newest > hostInstalled;
+                WriteJson(c, new { installed = BuildInfo.Version, hostInstalled = hostVersion, latest = latest, available = available, hostAvailable = hostAvailable });
+            }
+            catch (Exception ex) { c.Response.StatusCode = 503; WriteJson(c, new { installed = BuildInfo.Version, error = ex.Message }); }
+        }
+        private static void InstallUpdate(HttpListenerContext c)
+        {
+            if (!IsLocalJsonPost(c)) { c.Response.StatusCode = 400; c.Response.Close(); return; }
+            lock (Gate) if (ActiveSessions.Count > 0) { c.Response.StatusCode = 409; c.Response.Close(); return; }
+            try
+            {
+                Version latest, current;
+                if (!Version.TryParse(LatestReleaseVersion(), out latest) || !Version.TryParse(BuildInfo.Version, out current) || latest <= current)
+                { c.Response.StatusCode = 204; c.Response.Close(); return; }
+                c.Response.StatusCode = 202; c.Response.Close();
+                ThreadPool.QueueUserWorkItem(delegate { CheckForUpdate("--display-force"); });
+            }
+            catch { c.Response.StatusCode = 503; c.Response.Close(); }
+        }
         private static DashboardState Snapshot()
         {
             lock (Gate)
@@ -565,7 +731,7 @@ namespace NixLanConsole
                     ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); SaveSessions();
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (!AnyGame && ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
                 }
-                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online || Last == null ? new string[0] : Last.games, role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).ToArray() };
+                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = Settings.excludedGames, autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
             }
         }
         private static void WriteJson(HttpListenerContext c, object value)
@@ -580,6 +746,7 @@ namespace NixLanConsole
                 if (!File.Exists(SessionFile)) return;
                 long lastSaved = new DateTimeOffset(File.GetLastWriteTimeUtc(SessionFile)).ToUnixTimeMilliseconds();
                 Sessions.AddRange(Json.Deserialize<GameSession[]>(File.ReadAllText(SessionFile)) ?? new GameSession[0]);
+                foreach (var session in Sessions) if (!String.IsNullOrWhiteSpace(session.game)) KnownGames.Add(session.game);
                 if (CloseInterruptedSessions(Sessions, lastSaved)) SaveSessions();
             }
             catch { }
