@@ -350,7 +350,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.6.2"; }
+    internal static class BuildInfo { public const string Version = "1.4.6.3"; }
 
     internal static class DisplayServer
     {
@@ -374,8 +374,30 @@ namespace NixLanConsole
         private static TrayContext Tray;
         private static System.Threading.Timer UpdateTimer;
         private static int UpdateStarted;
+        private static readonly object UpdateProgressGate = new object();
+        private static string UpdateProgressState = "idle";
+        private static string UpdateProgressMessage = "每 5 分钟检查 GitHub 最新版本。";
+        private static string UpdateProgressVersion = "";
+        private static int UpdateProgressPercent = -1;
         private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
         private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+
+        private static void SetUpdateProgress(string state, int percent, string version, string message)
+        {
+            lock (UpdateProgressGate)
+            {
+                UpdateProgressState = state;
+                UpdateProgressPercent = percent;
+                UpdateProgressVersion = version ?? "";
+                UpdateProgressMessage = message ?? "";
+            }
+        }
+
+        private static object GetUpdateProgress()
+        {
+            lock (UpdateProgressGate)
+                return new { state = UpdateProgressState, percent = UpdateProgressPercent, version = UpdateProgressVersion, message = UpdateProgressMessage };
+        }
 
         public static void Run()
         {
@@ -393,8 +415,21 @@ namespace NixLanConsole
             try
             {
                 bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal);
-                if (hostMode) { if (HostSensor.HasGameRunning || !HostSensor.AutoUpdateEnabled) return; }
-                else { lock (Gate) { if (ActiveSessions.Count > 0 || (!String.Equals(ignored as string, "--display-force", StringComparison.Ordinal) && !Settings.autoUpdate)) return; } }
+                bool force = String.Equals(ignored as string, "--display-force", StringComparison.Ordinal);
+                if (hostMode)
+                {
+                    if (HostSensor.HasGameRunning) { SetUpdateProgress("waiting", -1, "", "主机游戏运行中，自动更新检查暂缓。"); return; }
+                    if (!HostSensor.AutoUpdateEnabled) { SetUpdateProgress("disabled", -1, "", "主机自动更新已关闭。"); return; }
+                }
+                else
+                {
+                    lock (Gate)
+                    {
+                        if (ActiveSessions.Count > 0) { SetUpdateProgress("waiting", -1, "", "副机检测到游戏仍在运行，更新会在游戏退出后进行。"); return; }
+                        if (!force && !Settings.autoUpdate) { SetUpdateProgress("disabled", -1, "", "副机自动更新已关闭。"); return; }
+                    }
+                }
+                SetUpdateProgress("checking", 3, "", "正在检查更新版本…");
                 string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 Version current; if (!Version.TryParse(BuildInfo.Version, out current)) return;
                 Version available = null; string sourceZip = null;
@@ -411,20 +446,23 @@ namespace NixLanConsole
                     if (ReadPackageVersion(githubZip, out githubVersion) && (available == null || githubVersion > available))
                     { available = githubVersion; sourceZip = githubZip; }
                 }
-                if (sourceZip == null) return;
+                if (sourceZip == null) { SetUpdateProgress("latest", 100, current.ToString(), "当前版本已是最新版本 " + current + "。"); return; }
+                SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在验证并准备安装…");
                 string updateDir = Path.Combine(DataDir, "updates"); Directory.CreateDirectory(updateDir);
                 string localZip = Path.Combine(updateDir, Path.GetFileName(sourceZip));
-                File.Copy(sourceZip, localZip, true);
+                if (!String.Equals(Path.GetFullPath(sourceZip), Path.GetFullPath(localZip), StringComparison.OrdinalIgnoreCase)) File.Copy(sourceZip, localZip, true);
                 string script = Path.Combine(BaseDir, "ApplyUpdate.ps1");
                 if (!File.Exists(script)) throw new FileNotFoundException("更新脚本不存在", script);
                 string localScript = Path.Combine(updateDir, "ApplyUpdate.ps1"); File.Copy(script, localScript, true);
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell\\v1.0\\powershell.exe");
                 string args = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(localScript) + " -TargetDir " + Quote(BaseDir) + " -Archive " + Quote(localZip) + " -ParentPid " + Process.GetCurrentProcess().Id + " -RestartRole " + (hostMode ? "--sensor" : "--display");
+                SetUpdateProgress("installing", 99, available.ToString(), "正在替换程序并重启控制台…");
                 Process.Start(new ProcessStartInfo(powershell, args) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
                 Environment.Exit(0);
             }
             catch (Exception ex)
             {
+                SetUpdateProgress("failed", -1, "", "更新失败：" + ex.Message);
                 try { File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " update check: " + ex.Message + Environment.NewLine, Encoding.UTF8); } catch { }
             }
             finally { Interlocked.Exchange(ref UpdateStarted, 0); }
@@ -459,19 +497,34 @@ namespace NixLanConsole
                         string temp = path + ".download";
                         try
                         {
-                            client.DownloadFile(url, temp);
+                            SetUpdateProgress("downloading", 0, version.ToString(), "正在下载更新包… 0%");
+                            Exception downloadError = null;
+                            using (var done = new ManualResetEvent(false))
+                            using (var downloadClient = new WebClient())
+                            {
+                                downloadClient.DownloadProgressChanged += delegate(object sender, DownloadProgressChangedEventArgs e)
+                                {
+                                    string amount = e.TotalBytesToReceive > 0 ? e.ProgressPercentage + "%" : (e.BytesReceived / 1048576d).ToString("F1") + " MB";
+                                    SetUpdateProgress("downloading", e.ProgressPercentage, version.ToString(), "正在下载更新包… " + amount);
+                                };
+                                downloadClient.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; done.Set(); };
+                                downloadClient.DownloadFileAsync(url, temp);
+                                if (!done.WaitOne(TimeSpan.FromMinutes(10))) { downloadClient.CancelAsync(); throw new TimeoutException("更新包下载超时。"); }
+                            }
+                            if (downloadError != null) throw downloadError;
+                            SetUpdateProgress("verifying", 97, version.ToString(), "下载完成，正在校验更新包…");
                             string digest = asset.ContainsKey("digest") ? Convert.ToString(asset["digest"]) : "";
                             if (!string.IsNullOrEmpty(digest))
                             {
-                                if (!digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) return null;
+                                if (!digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("GitHub 更新包校验格式无效。");
                                 using (var file = File.OpenRead(temp)) using (var sha = SHA256.Create())
                                 {
                                     string actual = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "");
-                                    if (!actual.Equals(digest.Substring(7), StringComparison.OrdinalIgnoreCase)) return null;
+                                    if (!actual.Equals(digest.Substring(7), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包校验失败，文件可能已损坏。");
                                 }
                             }
                             Version embedded;
-                            if (!ReadPackageVersion(temp, out embedded) || embedded != version) return null;
+                            if (!ReadPackageVersion(temp, out embedded) || embedded != version) throw new InvalidDataException("更新包中的版本信息无效。");
                             if (File.Exists(path)) File.Delete(path);
                             File.Move(temp, path);
                             return path;
@@ -572,6 +625,7 @@ namespace NixLanConsole
             if (path == "state") { WriteJson(c, Snapshot()); return; }
             if (path == "settings") { EditSettings(c); return; }
             if (path == "update/info") { WriteUpdateInfo(c); return; }
+            if (path == "update/progress") { WriteJson(c, GetUpdateProgress()); return; }
             if (path == "update/install") { InstallUpdate(c); return; }
             if (path == "session/edit") { EditSession(c); return; }
             if (path == "session/purge") { PurgeSessions(c); return; }
@@ -695,15 +749,17 @@ namespace NixLanConsole
         {
             try
             {
+                SetUpdateProgress("checking", 3, "", "正在查询 GitHub 最新版本…");
                 string latest = LatestReleaseVersion();
                 Version newest, current;
                 bool available = Version.TryParse(latest, out newest) && Version.TryParse(BuildInfo.Version, out current) && newest > current;
                 string hostVersion; lock (Gate) hostVersion = Last == null ? null : Last.version;
                 Version hostInstalled;
                 bool hostAvailable = Version.TryParse(latest, out newest) && Version.TryParse(hostVersion, out hostInstalled) && newest > hostInstalled;
+                SetUpdateProgress(available ? "available" : "latest", 100, latest, available ? "发现副机可用更新 " + latest + "。" : "副机已是最新版本 " + BuildInfo.Version + "。");
                 WriteJson(c, new { installed = BuildInfo.Version, hostInstalled = hostVersion, latest = latest, available = available, hostAvailable = hostAvailable });
             }
-            catch (Exception ex) { c.Response.StatusCode = 503; WriteJson(c, new { installed = BuildInfo.Version, error = ex.Message }); }
+            catch (Exception ex) { SetUpdateProgress("failed", -1, "", "检查更新失败：" + ex.Message); c.Response.StatusCode = 503; WriteJson(c, new { installed = BuildInfo.Version, error = ex.Message }); }
         }
         private static void InstallUpdate(HttpListenerContext c)
         {
@@ -717,7 +773,7 @@ namespace NixLanConsole
                 c.Response.StatusCode = 202; c.Response.Close();
                 ThreadPool.QueueUserWorkItem(delegate { CheckForUpdate("--display-force"); });
             }
-            catch { c.Response.StatusCode = 503; c.Response.Close(); }
+            catch (Exception ex) { SetUpdateProgress("failed", -1, "", "无法开始安装：" + ex.Message); c.Response.StatusCode = 503; c.Response.Close(); }
         }
         private static DashboardState Snapshot()
         {
