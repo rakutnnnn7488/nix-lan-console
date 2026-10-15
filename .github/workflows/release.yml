@@ -1,0 +1,38 @@
+name: Build and publish update
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'console-game-faithful.html'
+      - 'ApplyUpdate.ps1'
+      - 'build.ps1'
+      - 'version.txt'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build update package
+        shell: pwsh
+        run: |
+          $version = (Get-Content version.txt -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'version.txt must have four numeric parts' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+          Compress-Archive -Path build\ControlConsole.exe,build\ApplyUpdate.ps1,build\version.txt,build\console-game-faithful.html -DestinationPath "ControlConsole-update-$version.zip" -CompressionLevel Optimal
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Publish release if missing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Output "Release $tag already exists"; exit 0 }
+          gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" --title $tag --notes 'Code update only. Install the local full package once before using automatic updates.' --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
