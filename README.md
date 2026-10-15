@@ -19,4 +19,5 @@ Release 标签使用 `v1.4.3.0` 等四段版本号；附加同版本的 `Control
 1.4.4.0：游戏按完整可执行文件路径匹配，发现 Steam 库与官方终末地程序；历史中断会话会结清，记录界面可纠错。主机和副机均会自动检查更新（需先各安装一次此版本）。
 
 1.4.5.0：同一角色单实例运行；通过主机进程标识判断真正的新启动；副机复用已有 Edge 窗口并清理重复窗口。
+v1.4.6.0: Exclude Wallpaper Engine; Start opens settings for game records and updates.
 
