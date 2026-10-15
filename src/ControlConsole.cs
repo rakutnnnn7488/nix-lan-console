@@ -62,12 +62,12 @@ namespace NixLanConsole
             using (var dialog = new OpenFileDialog { Filter = "Windows 程序 (*.exe)|*.exe", Title = "选择要追踪的游戏程序", CheckFileExists = true })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                string process = Path.GetFileNameWithoutExtension(dialog.FileName);
                 string label = Path.GetFileNameWithoutExtension(dialog.FileName);
                 string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
                 Directory.CreateDirectory(dir); string file = Path.Combine(dir, "tracked-games.txt");
-                var lines = File.Exists(file) ? File.ReadAllLines(file).Where(x => !x.TrimStart().StartsWith(process + "|", StringComparison.OrdinalIgnoreCase) && !String.Equals(x.Trim(), process, StringComparison.OrdinalIgnoreCase)).ToList() : new List<string>();
-                lines.Add(process + "|" + label); File.WriteAllLines(file, lines, Encoding.UTF8);
+                string executable = Path.GetFullPath(dialog.FileName);
+                var lines = File.Exists(file) ? File.ReadAllLines(file).Where(x => !x.TrimStart().StartsWith(executable + "|", StringComparison.OrdinalIgnoreCase)).ToList() : new List<string>();
+                lines.Add(executable + "|" + label); File.WriteAllLines(file, lines, Encoding.UTF8);
                 MessageBox.Show(this, "已添加“" + label + "”。主机后台会自动读取新设置。", "游戏追踪", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
@@ -113,6 +113,10 @@ namespace NixLanConsole
         private static DateTime LastTemperatureRead = DateTime.MinValue;
         private static DateTime LastGameConfigRead = DateTime.MinValue;
         private static readonly Dictionary<string, string> GameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string> CustomGameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static System.Threading.Timer UpdateTimer;
+        private static volatile bool GameRunning;
+        internal static bool HasGameRunning { get { return GameRunning; } }
 
         public static void Run()
         {
@@ -120,6 +124,7 @@ namespace NixLanConsole
             StartTray();
             DiscoverGames();
             LoadCustomGames();
+            UpdateTimer = new System.Threading.Timer(DisplayServer.CheckForUpdate, "--sensor", TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
             try { CpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total"); CpuCounter.NextValue(); } catch { }
             using (var udp = new UdpClient())
             {
@@ -176,10 +181,16 @@ namespace NixLanConsole
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in Process.GetProcesses())
             {
-                try { string title = GameExecutables.ContainsKey(p.ProcessName) ? GameExecutables[p.ProcessName] : null; if (title != null) names.Add(title); }
+                try
+                {
+                    string path = Path.GetFullPath(p.MainModule.FileName);
+                    string title;
+                    if (CustomGameExecutables.TryGetValue(path, out title) || GameExecutables.TryGetValue(path, out title)) names.Add(title);
+                }
                 catch { }
                 finally { p.Dispose(); }
             }
+            GameRunning = names.Count > 0;
             return names.ToArray();
         }
         private static void DiscoverGames()
@@ -188,6 +199,25 @@ namespace NixLanConsole
             roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam", "steamapps", "common"));
             roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Steam", "steamapps", "common"));
             try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("Software\\Valve\\Steam")) { var v = k == null ? null : k.GetValue("SteamPath") as string; if (!String.IsNullOrEmpty(v)) roots.Add(Path.Combine(v, "steamapps", "common")); } } catch { }
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Steam", "steamapps", "common"));
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "SteamLibrary", "steamapps", "common"));
+                string endfield = Path.Combine(drive.RootDirectory.FullName, "Hypergryph Launcher", "games", "Endfield Game", "Endfield.exe");
+                if (File.Exists(endfield)) GameExecutables[Path.GetFullPath(endfield)] = "明日方舟：终末地";
+            }
+            foreach (string root in roots.ToArray())
+            {
+                try
+                {
+                    string libraries = Path.Combine(Directory.GetParent(Directory.GetParent(root).FullName).FullName, "steamapps", "libraryfolders.vdf");
+                    if (!File.Exists(libraries)) continue;
+                    foreach (Match match in Regex.Matches(File.ReadAllText(libraries), "\\\"path\\\"\\s+\\\"([^\\\"]+)\\\""))
+                        roots.Add(Path.Combine(match.Groups[1].Value.Replace("\\\\", "\\"), "steamapps", "common"));
+                }
+                catch { }
+            }
             foreach (string root in roots)
             {
                 try
@@ -200,8 +230,9 @@ namespace NixLanConsole
                         string dir = Path.Combine(root, dm.Groups[1].Value); if (!Directory.Exists(dir)) continue;
                         foreach (string exe in Directory.GetFiles(dir, "*.exe", SearchOption.AllDirectories))
                         {
-                            string lower = exe.ToLowerInvariant(); if (lower.Contains("\\redist\\") || lower.Contains("\\_commonredist\\") || lower.Contains("\\easyanticheat\\") || lower.Contains("\\battleye\\")) continue;
-                            string proc = Path.GetFileNameWithoutExtension(exe); if (proc.Length < 3) continue; GameExecutables[proc] = im.Groups[1].Value;
+                            string lower = exe.ToLowerInvariant(); if (lower.Contains("\\redist\\") || lower.Contains("\\_commonredist\\") || lower.Contains("\\easyanticheat\\") || lower.Contains("\\battleye\\") || lower.Contains("\\anticheat\\")) continue;
+                            string proc = Path.GetFileNameWithoutExtension(exe); if (proc.Length < 3 || Regex.IsMatch(proc, "crash|report|unins|setup|updater|cef|webengine|platformprocess", RegexOptions.IgnoreCase)) continue;
+                            GameExecutables[Path.GetFullPath(exe)] = im.Groups[1].Value;
                         }
                     }
                 }
@@ -216,7 +247,15 @@ namespace NixLanConsole
                 DateTime write = File.Exists(f) ? File.GetLastWriteTimeUtc(f) : DateTime.MinValue;
                 if (write <= LastGameConfigRead) return;
                 LastGameConfigRead = write;
-                foreach (string line in File.ReadAllLines(f)) { string[] p = line.Split('|'); if (p.Length > 0 && p[0].Trim().Length > 0) GameExecutables[p[0].Trim()] = p.Length > 1 ? p[1].Trim() : p[0].Trim(); }
+                CustomGameExecutables.Clear();
+                if (!File.Exists(f)) return;
+                foreach (string line in File.ReadAllLines(f))
+                {
+                    string[] p = line.Split(new[] { '|' }, 2);
+                    if (p.Length != 2 || !File.Exists(p[0].Trim())) continue;
+                    string path = Path.GetFullPath(p[0].Trim());
+                    CustomGameExecutables[path] = String.IsNullOrWhiteSpace(p[1]) ? Path.GetFileNameWithoutExtension(path) : p[1].Trim();
+                }
             }
             catch { }
         }
@@ -224,6 +263,7 @@ namespace NixLanConsole
 
     internal sealed class GameSession
     {
+        public string id;
         public string game;
         public long start;
         public long end;
@@ -240,7 +280,7 @@ namespace NixLanConsole
         public GameSession[] sessions;
     }
 
-    internal static class BuildInfo { public const string Version = "1.4.3.0"; }
+    internal static class BuildInfo { public const string Version = "1.4.4.0"; }
 
     internal static class DisplayServer
     {
@@ -274,12 +314,14 @@ namespace NixLanConsole
             var listener = new HttpListener(); listener.Prefixes.Add("http://127.0.0.1:" + HttpPort + "/"); listener.Start();
             while (true) { HttpListenerContext c = null; try { c = listener.GetContext(); Handle(c); } catch { if (c != null) try { c.Response.Close(); } catch { } } }
         }
-        private static void CheckForUpdate(object ignored)
+        internal static void CheckForUpdate(object ignored)
         {
             if (Interlocked.CompareExchange(ref UpdateStarted, 1, 0) != 0) return;
             try
             {
-                lock (Gate) if (ActiveSessions.Count > 0) return;
+                bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal);
+                if (hostMode) { if (HostSensor.HasGameRunning) return; }
+                else { lock (Gate) if (ActiveSessions.Count > 0) return; }
                 string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 Version current; if (!Version.TryParse(BuildInfo.Version, out current)) return;
                 Version available = null; string sourceZip = null;
@@ -304,7 +346,7 @@ namespace NixLanConsole
                 if (!File.Exists(script)) throw new FileNotFoundException("更新脚本不存在", script);
                 string localScript = Path.Combine(updateDir, "ApplyUpdate.ps1"); File.Copy(script, localScript, true);
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell\\v1.0\\powershell.exe");
-                string args = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(localScript) + " -TargetDir " + Quote(BaseDir) + " -Archive " + Quote(localZip) + " -ParentPid " + Process.GetCurrentProcess().Id + " -RestartRole --display";
+                string args = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(localScript) + " -TargetDir " + Quote(BaseDir) + " -Archive " + Quote(localZip) + " -ParentPid " + Process.GetCurrentProcess().Id + " -RestartRole " + (hostMode ? "--sensor" : "--display");
                 Process.Start(new ProcessStartInfo(powershell, args) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
                 Environment.Exit(0);
             }
@@ -416,7 +458,7 @@ namespace NixLanConsole
             foreach (string name in current)
                 if (!ActiveSessions.ContainsKey(name))
                 {
-                    ActiveSessions[name] = new GameSession { game = name, start = p.utc, end = 0 };
+                    ActiveSessions[name] = new GameSession { id = Guid.NewGuid().ToString("N"), game = name, start = p.utc, end = 0 };
                     Sessions.Insert(0, ActiveSessions[name]);
                 }
             foreach (string name in ActiveSessions.Keys.ToArray())
@@ -445,6 +487,7 @@ namespace NixLanConsole
         {
             string path = c.Request.Url.AbsolutePath.Trim('/');
             if (path == "state") { WriteJson(c, Snapshot()); return; }
+            if (path == "session/edit") { EditSession(c); return; }
             if (path.StartsWith("window/", StringComparison.OrdinalIgnoreCase))
             {
                 string action = path.Substring("window/".Length);
@@ -458,6 +501,39 @@ namespace NixLanConsole
             string ext = Path.GetExtension(full).ToLowerInvariant();
             c.Response.ContentType = ext == ".html" ? "text/html; charset=utf-8" : ext == ".png" ? "image/png" : ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : ext == ".gif" ? "image/gif" : ext == ".css" ? "text/css" : "application/octet-stream";
             byte[] bytes = File.ReadAllBytes(full); c.Response.ContentLength64 = bytes.Length; c.Response.OutputStream.Write(bytes, 0, bytes.Length); c.Response.Close();
+        }
+        private static void EditSession(HttpListenerContext c)
+        {
+            if (c.Request.HttpMethod != "POST" || String.IsNullOrEmpty(c.Request.ContentType) || !c.Request.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) || c.Request.ContentLength64 < 0 || c.Request.ContentLength64 > 4096)
+            { c.Response.StatusCode = 400; c.Response.Close(); return; }
+            string origin = c.Request.Headers["Origin"];
+            if (origin != null && origin != "http://127.0.0.1:" + HttpPort)
+            { c.Response.StatusCode = 403; c.Response.Close(); return; }
+            try
+            {
+                string body;
+                using (var reader = new StreamReader(c.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+                var edit = Json.Deserialize<Dictionary<string, object>>(body);
+                string id = Convert.ToString(edit["id"]);
+                lock (Gate)
+                {
+                    var session = Sessions.FirstOrDefault(s => s.id == id);
+                    if (session == null) { c.Response.StatusCode = 404; c.Response.Close(); return; }
+                    if (ActiveSessions.Values.Contains(session)) { c.Response.StatusCode = 409; c.Response.Close(); return; }
+                    if (edit.ContainsKey("delete") && Convert.ToBoolean(edit["delete"])) Sessions.Remove(session);
+                    else
+                    {
+                        string game = Convert.ToString(edit["game"]).Trim();
+                        long end = Convert.ToInt64(edit["end"]);
+                        if (game.Length == 0 || game.Length > 100 || end < session.start || end > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60000)
+                        { c.Response.StatusCode = 400; c.Response.Close(); return; }
+                        session.game = game; session.end = end;
+                    }
+                    SaveSessions();
+                }
+                c.Response.StatusCode = 204; c.Response.Close();
+            }
+            catch { c.Response.StatusCode = 400; c.Response.Close(); }
         }
         private static DashboardState Snapshot()
         {
@@ -479,7 +555,27 @@ namespace NixLanConsole
             byte[] bytes = Encoding.UTF8.GetBytes(Json.Serialize(value)); c.Response.ContentType = "application/json; charset=utf-8"; c.Response.Headers.Add("Access-Control-Allow-Origin", "*"); c.Response.ContentLength64 = bytes.Length; c.Response.OutputStream.Write(bytes, 0, bytes.Length); c.Response.Close();
         }
         private static string SessionFile { get { return Path.Combine(DataDir, "sessions.json"); } }
-        private static void LoadSessions() { try { Sessions.AddRange(Json.Deserialize<GameSession[]>(File.ReadAllText(SessionFile)) ?? new GameSession[0]); } catch { } }
+        private static void LoadSessions()
+        {
+            try
+            {
+                if (!File.Exists(SessionFile)) return;
+                long lastSaved = new DateTimeOffset(File.GetLastWriteTimeUtc(SessionFile)).ToUnixTimeMilliseconds();
+                Sessions.AddRange(Json.Deserialize<GameSession[]>(File.ReadAllText(SessionFile)) ?? new GameSession[0]);
+                if (CloseInterruptedSessions(Sessions, lastSaved)) SaveSessions();
+            }
+            catch { }
+        }
+        private static bool CloseInterruptedSessions(IEnumerable<GameSession> sessions, long lastSaved)
+        {
+            bool repaired = false;
+            foreach (var session in sessions)
+            {
+                if (String.IsNullOrEmpty(session.id)) { session.id = Guid.NewGuid().ToString("N"); repaired = true; }
+                if (session.end == 0) { session.end = Math.Max(session.start, lastSaved); repaired = true; }
+            }
+            return repaired;
+        }
         private static void SaveSessions() { try { File.WriteAllText(SessionFile, Json.Serialize(Sessions.Take(1000).ToArray()), Encoding.UTF8); } catch { } }
         private static void LaunchBrowser()
         {
