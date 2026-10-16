@@ -31,3 +31,5 @@ v1.4.6.0: Exclude Wallpaper Engine; Start opens settings for game records and up
 1.4.6.4：将任务栏按钮改为游戏原生弹起/按下两态素材，按钮状态随窗口最小化和恢复切换；修正开始按钮乱码。
 
 1.4.6.5：修复 GitHub 下载未返回 Content-Length 时进度条停在 0% 的问题；改为不定进度动画并显示已下载的 MB。
+
+1.5.0.1：角色画布启用双缓冲，仅在实际换帧时重绘，修复持续闪烁；原生主界面增加游戏风格底部任务栏和“开始”设置入口。

@@ -23,6 +23,9 @@ namespace NixLanConsole
         private readonly Panel CharacterCanvas;
         private readonly Panel Desktop;
         private readonly Panel Rail;
+        private readonly Panel Taskbar;
+        private readonly Button StartButton;
+        private readonly Label TaskbarStatus;
         private readonly Panel CharacterCard;
         private readonly Panel StatsCard;
         private readonly Panel RecordsCard;
@@ -36,7 +39,10 @@ namespace NixLanConsole
         private Image CharacterBackground;
         private Image SideBackground;
         private Image WindowFrame;
+        private Image StartBackground;
+        private Image StartPressedBackground;
         private RoleClip CurrentClip;
+        private Image DisplayedFrame;
         private DateTime ClipStarted;
         private bool IsKangel;
         private bool IsGameRunning;
@@ -79,15 +85,13 @@ namespace NixLanConsole
                     else HostState.Focus();
                 };
             }
-            var startButton = new Button { Text = "▣  开始 / 设置", Dock = DockStyle.Bottom, Height = 44, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(218, 192, 236), ForeColor = Color.FromArgb(62, 49, 137), Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold) };
-            startButton.Click += delegate { OpenSettings(); }; Rail.Controls.Add(startButton);
             body.Controls.Add(Rail);
 
             Desktop = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(250, 235, 250) };
             Desktop.Paint += PaintDesktop;
             CharacterCard = Card("WEBCAM  /  CHARACTER", 716);
             CharacterState = new Label { Text = "糖糖 · 日常待机 ♡", Dock = DockStyle.Bottom, Height = 44, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(64, 50, 147), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
-            CharacterCanvas = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(252, 244, 251), BackgroundImageLayout = ImageLayout.Stretch };
+            CharacterCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(252, 244, 251) };
             CharacterCanvas.Paint += PaintCharacter;
             CharacterCard.Controls.Add(CharacterCanvas); CharacterCard.Controls.Add(CharacterState); Desktop.Controls.Add(CharacterCard);
 
@@ -112,9 +116,30 @@ namespace NixLanConsole
             GameList = new Label { Text = "等待主机游戏记录…", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(70, 59, 143), Font = new Font("Microsoft YaHei UI", 10F), Padding = new Padding(4, 10, 4, 4) };
             RecordsCard.Controls.Add(GameList); Desktop.Controls.Add(RecordsCard); body.Controls.Add(Desktop); Controls.Add(body);
             top.SendToBack(); Rail.SendToBack();
+            Taskbar = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Color.FromArgb(247, 224, 247), Padding = new Padding(4, 4, 4, 4) };
+            Taskbar.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Color.FromArgb(89, 62, 156), 2)) e.Graphics.DrawLine(pen, 0, 1, Taskbar.Width, 1); };
+            StartButton = new Button { Text = "开始", Dock = DockStyle.Left, Width = 136, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(38, 31, 94), BackColor = Color.FromArgb(246, 222, 249), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), BackgroundImageLayout = ImageLayout.Stretch };
+            StartButton.FlatAppearance.BorderSize = 0;
+            StartButton.Click += delegate { OpenSettings(); };
+            StartButton.MouseDown += delegate { if (StartPressedBackground != null) StartButton.BackgroundImage = StartPressedBackground; };
+            StartButton.MouseUp += delegate { StartButton.BackgroundImage = StartBackground; };
+            Taskbar.Controls.Add(StartButton);
+            foreach (string tabName in new[] { "▣  WEBCAM", "▣  HOST STATUS", "▣  GAME RECORDS" })
+            {
+                var tab = new Button { Text = tabName, Dock = DockStyle.Left, Width = 176, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.FromArgb(238, 211, 242), ForeColor = Color.FromArgb(65, 48, 145), Font = new Font("Consolas", 9F, FontStyle.Bold) };
+                tab.FlatAppearance.BorderColor = Color.FromArgb(116, 91, 173);
+                string selected = tabName;
+                tab.Click += delegate { if (selected.Contains("GAME")) { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); } else if (selected.Contains("HOST")) StatsCard.BringToFront(); else CharacterCard.BringToFront(); };
+                Taskbar.Controls.Add(tab); tab.BringToFront();
+            }
+            TaskbarStatus = new Label { Text = "○ 主机离线", Dock = DockStyle.Right, Width = 230, TextAlign = ContentAlignment.MiddleRight, ForeColor = Color.FromArgb(73, 55, 147), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
+            Taskbar.Controls.Add(TaskbarStatus);
+            Controls.Add(Taskbar); Taskbar.SendToBack();
             Desktop.Resize += delegate { LayoutDesktop(); };
-            Resize += delegate { Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920)); LayoutDesktop(); };
+            Resize += delegate { Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920)); Taskbar.Height = Math.Max(40, (int)(ClientSize.Height * 40.0 / 1080)); StartButton.Width = Math.Max(136, (int)(ClientSize.Width * 136.0 / 1920)); LayoutDesktop(); };
             Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920));
+            Taskbar.Height = Math.Max(40, (int)(ClientSize.Height * 40.0 / 1080));
+            StartButton.Width = Math.Max(136, (int)(ClientSize.Width * 136.0 / 1920));
             LayoutDesktop();
 
             RefreshTimer = new Timer { Interval = 1000 };
@@ -125,7 +150,8 @@ namespace NixLanConsole
             AnimationTimer.Tick += delegate
             {
                 if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >= CurrentClip.Duration) SelectRoleClip(IsKangel, IsGameRunning);
-                CharacterCanvas.Invalidate();
+                Image frame = CurrentFrame();
+                if (!Object.ReferenceEquals(frame, DisplayedFrame)) { DisplayedFrame = frame; CharacterCanvas.Invalidate(); }
             };
             AnimationTimer.Start();
             FormClosed += delegate
@@ -134,6 +160,8 @@ namespace NixLanConsole
                 if (CharacterBackground != null) CharacterBackground.Dispose();
                 if (SideBackground != null) SideBackground.Dispose();
                 if (WindowFrame != null) WindowFrame.Dispose();
+                if (StartBackground != null) StartBackground.Dispose();
+                if (StartPressedBackground != null) StartPressedBackground.Dispose();
                 foreach (var image in FrameCache.Values) image.Dispose();
             };
             RefreshData();
@@ -206,6 +234,7 @@ namespace NixLanConsole
         {
             DashboardState state = DisplayServer.Snapshot();
             HostState.Text = state.online ? "● 主机在线  /  " + state.host : "○ 主机离线";
+            TaskbarStatus.Text = state.online ? "● 主机在线" : "○ 主机离线";
             MetricValues[0].Text = state.online ? Math.Round(state.cpu) + "%" : "—";
             MetricValues[1].Text = state.online && state.memoryTotal > 0 ? Math.Round(state.memoryUsed / state.memoryTotal * 100) + "%" : "—";
             MetricValues[2].Text = state.online && state.gpu >= 0 ? Math.Round(state.gpu) + "%" : "—";
@@ -229,6 +258,8 @@ namespace NixLanConsole
                 if (File.Exists(Path.Combine(assets, "bg_stream_native.png"))) CharacterBackground = LoadDetachedImage(Path.Combine(assets, "bg_stream_native.png"));
                 if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) { SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png")); Rail.BackgroundImage = SideBackground; }
                 if (File.Exists(Path.Combine(assets, "window_active.png"))) { WindowFrame = LoadDetachedImage(Path.Combine(assets, "window_active.png")); CharacterCard.Invalidate(); StatsCard.Invalidate(); RecordsCard.Invalidate(); }
+                if (File.Exists(Path.Combine(assets, "button_start.png"))) { StartBackground = LoadDetachedImage(Path.Combine(assets, "button_start.png")); StartButton.BackgroundImage = StartBackground; }
+                if (File.Exists(Path.Combine(assets, "start_pressed.png"))) StartPressedBackground = LoadDetachedImage(Path.Combine(assets, "start_pressed.png"));
                 if (!File.Exists(manifest)) return;
                 var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(manifest, Encoding.UTF8));
                 foreach (var entry in data)
@@ -269,6 +300,7 @@ namespace NixLanConsole
             var list = kangel && !gameRunning ? KangelClips.Where(x => x.Name != "stream_cho_game").ToList() : kangel ? KangelClips : AmeClips;
             CurrentClip = list.Count == 0 ? null : list[Randomizer.Next(list.Count)];
             ClipStarted = DateTime.UtcNow;
+            DisplayedFrame = CurrentFrame();
             CharacterCanvas.Invalidate();
         }
 
@@ -303,6 +335,15 @@ namespace NixLanConsole
 
         private sealed class RoleClip { public string Name; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
         private sealed class RoleFrame { public double Time; public Image Image; }
+
+        private sealed class BufferedPanel : Panel
+        {
+            public BufferedPanel()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
+        }
 
         private static string RecentSummary(GameSession[] sessions)
         {
