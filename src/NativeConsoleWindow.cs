@@ -49,6 +49,8 @@ namespace NixLanConsole
         private string RoleAssetError;
         private bool Dragging;
         private Point DragOrigin;
+        private readonly Dictionary<string, double[]> SavedPositions = new Dictionary<string, double[]>();
+        private static string LayoutFile { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole", "ui-layout.json"); } }
 
         public NativeConsoleWindow()
         {
@@ -81,14 +83,17 @@ namespace NixLanConsole
                 {
                     if (action == "游戏记录") { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); }
                     else if (action == "设置") OpenSettings();
-                    else if (action == "角色 / Webcam") CharacterCanvas.Focus();
-                    else HostState.Focus();
+                    else if (action == "角色 / Webcam") CharacterCard.BringToFront();
+                    else StatsCard.BringToFront();
                 };
             }
             body.Controls.Add(Rail);
 
             Desktop = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(250, 235, 250) };
             Desktop.Paint += PaintDesktop;
+            var desktopMenu = new ContextMenuStrip();
+            desktopMenu.Items.Add("恢复默认窗口位置", null, delegate { SavedPositions.Clear(); SaveLayout(); LayoutDesktop(); });
+            Desktop.ContextMenuStrip = desktopMenu;
             CharacterCard = Card("WEBCAM  /  CHARACTER", 716);
             CharacterState = new Label { Text = "糖糖 · 日常待机 ♡", Dock = DockStyle.Bottom, Height = 44, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(64, 50, 147), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
             CharacterCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(252, 244, 251) };
@@ -96,21 +101,26 @@ namespace NixLanConsole
             CharacterCard.Controls.Add(CharacterCanvas); CharacterCard.Controls.Add(CharacterState); Desktop.Controls.Add(CharacterCard);
 
             StatsCard = Card("HOST STATUS", 392);
-            HostState = new Label { Text = "主机离线", Dock = DockStyle.Top, Height = 35, ForeColor = Color.FromArgb(82, 79, 153), Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold) }; StatsCard.Controls.Add(HostState);
-            string[] metricNames = { "CPU", "MEMORY", "GPU", "TEMPERATURE" };
-            for (int i = metricNames.Length - 1; i >= 0; i--)
+            var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(0) };
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 18));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 28));
+            HostState = new Label { Text = "主机离线", Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(82, 79, 153), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) }; metrics.Controls.Add(HostState, 0, 0);
+            string[] metricNames = { "CPU", "内存", "GPU", "温度" };
+            for (int i = 0; i < metricNames.Length; i++)
             {
-                var row = new Panel { Dock = DockStyle.Top, Height = 57, Padding = new Padding(0, 3, 0, 3) };
-                MetricValues[i] = new Label { Text = "—", Dock = DockStyle.Right, Width = 94, TextAlign = ContentAlignment.MiddleRight, ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 12F, FontStyle.Bold) };
-                var name = new Label { Text = metricNames[i], Dock = DockStyle.Top, Height = 20, ForeColor = Color.FromArgb(100, 86, 159), Font = new Font("Consolas", 9F, FontStyle.Bold) };
-                var track = new Panel { Dock = DockStyle.Bottom, Height = 17, BackColor = Color.FromArgb(222, 207, 234) };
+                var row = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 3) };
+                MetricValues[i] = new Label { Text = "—", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 10F, FontStyle.Bold) };
+                var name = new Label { Text = metricNames[i], Dock = DockStyle.Left, Width = 48, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(100, 86, 159), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
+                var track = new Panel { Dock = DockStyle.Bottom, Height = 9, BackColor = Color.FromArgb(222, 207, 234) };
                 MetricFills[i] = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = i == 1 ? Color.FromArgb(111, 178, 212) : Color.FromArgb(118, 102, 192) }; track.Controls.Add(MetricFills[i]);
-                row.Controls.Add(track); row.Controls.Add(name); row.Controls.Add(MetricValues[i]); StatsCard.Controls.Add(row);
+                row.Controls.Add(MetricValues[i]); row.Controls.Add(name); row.Controls.Add(track); metrics.Controls.Add(row, 0, i + 1);
             }
 
-            Chart = new Panel { Dock = DockStyle.Bottom, Height = 70, BackColor = Color.FromArgb(255, 248, 255), Margin = new Padding(0, 8, 0, 8) };
+            Chart = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 248, 255), Margin = new Padding(0, 4, 0, 0) };
             Chart.Paint += PaintChart;
-            StatsCard.Controls.Add(Chart); Desktop.Controls.Add(StatsCard);
+            metrics.Controls.Add(Chart, 0, 5); StatsCard.Controls.Add(metrics); Desktop.Controls.Add(StatsCard);
 
             RecordsCard = Card("GAME RECORDS  /  LAST 7 DAYS", 615);
             GameList = new Label { Text = "等待主机游戏记录…", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(70, 59, 143), Font = new Font("Microsoft YaHei UI", 10F), Padding = new Padding(4, 10, 4, 4) };
@@ -140,6 +150,7 @@ namespace NixLanConsole
             Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920));
             Taskbar.Height = Math.Max(40, (int)(ClientSize.Height * 40.0 / 1080));
             StartButton.Width = Math.Max(136, (int)(ClientSize.Width * 136.0 / 1920));
+            LoadLayout();
             LayoutDesktop();
 
             RefreshTimer = new Timer { Interval = 1000 };
@@ -176,7 +187,7 @@ namespace NixLanConsole
 
         private Panel Card(string title, int width)
         {
-            var card = new Panel { Width = width, BackColor = Color.FromArgb(255, 248, 255), Padding = new Padding(12, 42, 12, 12), Margin = new Padding(8) };
+            var card = new BufferedPanel { Name = title, Width = width, BackColor = Color.FromArgb(255, 248, 255), Padding = new Padding(12, 42, 12, 20), Margin = new Padding(8) };
             card.Paint += delegate(object sender, PaintEventArgs e)
             {
                 if (WindowFrame != null) DrawNineSlice(e.Graphics, WindowFrame, card.ClientRectangle);
@@ -184,14 +195,14 @@ namespace NixLanConsole
                 using (var font = new Font("Consolas", 10F, FontStyle.Bold)) using (var brush = new SolidBrush(Color.FromArgb(70, 51, 150))) e.Graphics.DrawString("■ " + title, font, brush, 18, 11);
             };
             bool moving = false; Point origin = Point.Empty;
-            card.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && e.Y < 40) { moving = true; origin = e.Location; card.BringToFront(); } };
+            card.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && e.Y < 40) { moving = true; origin = e.Location; card.Capture = true; card.BringToFront(); } };
             card.MouseMove += delegate(object sender, MouseEventArgs e)
             {
                 if (!moving) return;
                 card.Left = Math.Max(0, Math.Min(Desktop.Width - card.Width, card.Left + e.X - origin.X));
                 card.Top = Math.Max(0, Math.Min(Desktop.Height - card.Height, card.Top + e.Y - origin.Y));
             };
-            card.MouseUp += delegate { moving = false; };
+            card.MouseUp += delegate { if (moving) { moving = false; card.Capture = false; RememberPosition(card); SaveLayout(); } };
             return card;
         }
 
@@ -215,7 +226,37 @@ namespace NixLanConsole
             CharacterCard.Bounds = ScaleRect(174, 22, 716, 508, scale);
             StatsCard.Bounds = ScaleRect(1038, 0, 392, 353, scale);
             RecordsCard.Bounds = ScaleRect(815, 410, 615, 575, scale);
-            Chart.Height = Math.Max(50, (int)(70 * scale));
+            foreach (var card in new[] { CharacterCard, StatsCard, RecordsCard })
+            {
+                double[] position;
+                if (SavedPositions.TryGetValue(card.Name, out position)) card.Location = new Point((int)(position[0] * Math.Max(0, Desktop.Width - card.Width)), (int)(position[1] * Math.Max(0, Desktop.Height - card.Height)));
+            }
+        }
+        private void RememberPosition(Panel card)
+        {
+            SavedPositions[card.Name] = new[] { Math.Max(0, Math.Min(1, card.Left / (double)Math.Max(1, Desktop.Width - card.Width))), Math.Max(0, Math.Min(1, card.Top / (double)Math.Max(1, Desktop.Height - card.Height))) };
+        }
+        private void LoadLayout()
+        {
+            try
+            {
+                if (!File.Exists(LayoutFile)) return;
+                var saved = new JavaScriptSerializer().Deserialize<Dictionary<string, double[]>>(File.ReadAllText(LayoutFile, Encoding.UTF8));
+                if (saved == null) return;
+                foreach (var item in saved) if (item.Value != null && item.Value.Length == 2 && item.Value.All(v => !Double.IsNaN(v) && !Double.IsInfinity(v) && v >= 0 && v <= 1)) SavedPositions[item.Key] = item.Value;
+            }
+            catch (Exception ex) { StartupDiagnostics.Write("layout load: " + ex.Message); }
+        }
+        private void SaveLayout()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LayoutFile));
+                string pending = LayoutFile + ".pending";
+                File.WriteAllText(pending, new JavaScriptSerializer().Serialize(SavedPositions), Encoding.UTF8);
+                if (File.Exists(LayoutFile)) File.Replace(pending, LayoutFile, null); else File.Move(pending, LayoutFile);
+            }
+            catch (Exception ex) { StartupDiagnostics.Write("layout save: " + ex.Message); }
         }
         private void PaintDesktop(object sender, PaintEventArgs e)
         {
@@ -235,12 +276,13 @@ namespace NixLanConsole
             DashboardState state = DisplayServer.Snapshot();
             HostState.Text = state.online ? "● 主机在线  /  " + state.host : "○ 主机离线";
             TaskbarStatus.Text = state.online ? "● 主机在线" : "○ 主机离线";
-            MetricValues[0].Text = state.online ? Math.Round(state.cpu) + "%" : "—";
+            MetricValues[0].Text = state.online && state.cpu >= 0 ? Math.Round(state.cpu) + "%" : "—";
             MetricValues[1].Text = state.online && state.memoryTotal > 0 ? Math.Round(state.memoryUsed / state.memoryTotal * 100) + "%" : "—";
             MetricValues[2].Text = state.online && state.gpu >= 0 ? Math.Round(state.gpu) + "%" : "—";
             MetricValues[3].Text = state.online ? "CPU " + Temp(state.cpuTemp) + " / GPU " + Temp(state.gpuTemp) : "—";
             double[] values = { state.cpu, state.online && state.memoryTotal > 0 ? state.memoryUsed / state.memoryTotal * 100 : -1, state.gpu, -1 };
             for (int i = 0; i < 3; i++) MetricFills[i].Width = (int)(MetricFills[i].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, values[i])) / 100.0);
+            MetricFills[3].Width = (int)(MetricFills[3].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, Math.Max(state.cpuTemp, state.gpuTemp))) / 100.0);
             Samples.Add(new[] { values[0], values[1], values[2] }); if (Samples.Count > 60) Samples.RemoveAt(0); Chart.Invalidate();
             CharacterState.Text = state.role == "kangel" || state.role == "transform" ? "超天酱 · " + (state.games != null && state.games.Length > 0 ? "游戏运行中 ♡" : "待机 ♡") : "糖糖 · 日常待机 ♡";
             bool kangel = state.role == "kangel" || state.role == "transform";
@@ -365,9 +407,15 @@ namespace NixLanConsole
         private void PaintChart(object sender, PaintEventArgs e)
         {
             var rect = Chart.ClientRectangle; if (rect.Width < 50 || rect.Height < 40) return;
-            using (var grid = new Pen(Color.FromArgb(230, 218, 239)))
-                for (int i = 1; i <= 3; i++) e.Graphics.DrawLine(grid, 8, i * (rect.Height - 12) / 4, rect.Width - 8, i * (rect.Height - 12) / 4);
             Color[] colors = { Color.FromArgb(74, 57, 171), Color.FromArgb(91, 174, 206), Color.FromArgb(202, 113, 179) };
+            using (var font = new Font("Microsoft YaHei UI", 8F))
+            {
+                string[] labels = { "CPU", "内存", "GPU" };
+                for (int i = 0; i < 3; i++) using (var brush = new SolidBrush(colors[i])) e.Graphics.DrawString(labels[i], font, brush, 8 + i * 52, 0);
+                using (var brush = new SolidBrush(Color.FromArgb(100, 86, 159))) e.Graphics.DrawString("最近 60 秒", font, brush, Math.Max(164, rect.Width - 78), 0);
+            }
+            using (var grid = new Pen(Color.FromArgb(230, 218, 239)))
+                for (int i = 1; i <= 3; i++) e.Graphics.DrawLine(grid, 8, 18 + i * (rect.Height - 24) / 4, rect.Width - 8, 18 + i * (rect.Height - 24) / 4);
             for (int series = 0; series < 3; series++)
             {
                 using (var pen = new Pen(colors[series], 2))
@@ -377,7 +425,7 @@ namespace NixLanConsole
                     {
                         double value = Samples[i][series]; if (value < 0) { previous = null; continue; }
                         int x = 8 + i * (rect.Width - 16) / 59;
-                        int y = rect.Height - 6 - (int)(Math.Max(0, Math.Min(100, value)) * (rect.Height - 20) / 100);
+                        int y = rect.Height - 6 - (int)(Math.Max(0, Math.Min(100, value)) * (rect.Height - 24) / 100);
                         var point = new Point(x, y); if (previous.HasValue) e.Graphics.DrawLine(pen, previous.Value, point); previous = point;
                     }
                 }
