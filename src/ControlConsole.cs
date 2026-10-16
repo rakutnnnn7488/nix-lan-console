@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -382,7 +382,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.5.0.2"; }
+    internal static class BuildInfo { public const string Version = "1.5.0.3"; }
 
     internal static class DisplayServer
     {
