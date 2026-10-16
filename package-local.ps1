@@ -15,5 +15,9 @@ $roleDir = Join-Path $packageDir 'game-assets\native-role'
 if (-not (Get-ChildItem -LiteralPath $roleDir -Filter '*.json' -File -ErrorAction SilentlyContinue)) { throw 'Role manifest is missing.' }
 Set-Content -LiteralPath (Join-Path $packageDir 'update-source.txt') -Encoding UTF8 -Value 'rakutnnnn7488/nix-lan-console'
 Compress-Archive -LiteralPath $packageDir -DestinationPath $zip -CompressionLevel Optimal
+$installer = Join-Path $OutputRoot ("NixLanConsole-Setup-$version.exe")
+& (Join-Path $PSScriptRoot 'build-installer.ps1') -PackageDir $packageDir -OutputExe $installer
+if ($LASTEXITCODE -ne 0) { throw "Installer build failed: $LASTEXITCODE" }
 Write-Output $packageDir
 Write-Output $zip
+Write-Output $installer
