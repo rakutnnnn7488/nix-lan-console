@@ -8,7 +8,7 @@ Windows 主机发送硬件状态与游戏进程，副机显示控制台和游戏
 
 ## 更新发布
 
-Release 标签使用四段版本号；附加同版本的 `ControlConsole-update-版本.zip`。GitHub 更新包只含程序、更新脚本和版本号，不公开游戏素材。完整本地包由 `package-local.ps1 -GameAssetsDir <本地游戏素材目录>` 生成，内含 `update-source.txt` 和仅供个人使用的本地游戏素材。控制台画面由 WinForms 原生窗口绘制，不需要浏览器或 HTML 服务。
+Release 标签使用四段版本号；附加同版本的 `ControlConsole-update-版本.zip`。GitHub 更新包只含程序、更新脚本和版本号，不公开游戏素材。完整本地包由 `package-local.ps1 -GameAssetsDir <本地游戏素材目录>` 生成，内含 `update-source.txt`、仅供个人使用的本地游戏素材，以及独立的 `NixLanConsole-Setup-版本.exe` 安装程序。安装器将程序包嵌入单个 EXE，支持覆盖安装、备份旧目录、失败回滚和保留用户配置；请仅通过私有方式传给副机，不要公开上传包含游戏素材的安装器。控制台画面由 WinForms 原生窗口绘制，不需要浏览器或 HTML 服务。
 
 首次安装需要完整的本地安装包。这个仓库不提供游戏提取素材，也不提供完整安装包；请在你自己的合法游戏副本中提取素材并放进 `game-assets`。不要公开分发游戏素材。GitHub 发布包只包含程序更新。
 
