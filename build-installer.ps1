@@ -7,9 +7,11 @@ $PackageDir = [IO.Path]::GetFullPath($PackageDir)
 $OutputExe = [IO.Path]::GetFullPath($OutputExe)
 $stub = Join-Path $PSScriptRoot 'src\SetupStub.cs'
 if (-not (Test-Path -LiteralPath $stub -PathType Leaf)) { throw "Installer source not found: $stub" }
-foreach ($required in @('ControlConsole.exe','ApplyUpdate.ps1','version.txt','game-assets\native-role\角色动画.json')) {
+foreach ($required in @('ControlConsole.exe','Updater.exe','ApplyUpdate.ps1','version.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $required) -PathType Leaf)) { throw "Full package is missing: $required" }
 }
+$roleManifests = Get-ChildItem -LiteralPath (Join-Path $PackageDir 'game-assets\native-role') -Filter '*.json' -File -ErrorAction SilentlyContinue
+if (-not $roleManifests) { throw 'Full package is missing the native character animation manifest.' }
 $version = (Get-Content -LiteralPath (Join-Path $PackageDir 'version.txt') -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Invalid four-part application version.' }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('NixLanConsoleSetup-' + [guid]::NewGuid().ToString('N'))
