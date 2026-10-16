@@ -1,6 +1,10 @@
 # 局域网桌面控制台
 
-Windows 主机发送硬件状态与游戏进程，副机显示控制台和游戏时长。副机每 5 分钟检查 GitHub 最新 Release，并在无游戏运行时安装更新。
+Windows 主机发送硬件状态与游戏进程，副机显示控制台和游戏时长。副机通过 TCP 主动连接主机，不再依赖 UDP 广播或副机绑定监听端口。副机每 5 分钟检查 GitHub 最新 Release，并在无游戏运行时安装更新。
+
+## 局域网连接
+
+主机监听 TCP 46702。首次配置请在主机的管理员 PowerShell 运行 `OpenHostTcpPort.ps1`，或手动执行：`New-NetFirewallRule -DisplayName "NixLanConsole TCP 46702" -Direction Inbound -Protocol TCP -LocalPort 46702 -Action Allow -Profile Private`。副机在“开始 → 设置 → 软件版本”的“主机 IPv4 地址”填写主机地址；保存后会自动重连。当前主机地址是 `192.168.1.7`。若路由器日后分配了新地址，只需更新这个设置。
 
 ## 构建
 
@@ -38,3 +42,7 @@ v1.4.6.0: Exclude Wallpaper Engine; Start opens settings for game records and up
 
 
 1.5.0.3：主机状态窗口增加 CPU、内存、GPU 与温度条及最近 60 秒曲线；三个桌面窗口可拖动，位置按屏幕比例保存，并在分辨率变化后保持可见。
+
+1.5.1.0：主副机状态连接改为副机主动 TCP 轮询，消除副机 UDP 46701 监听冲突；副机设置中可更改主机 IPv4 地址。主机首次运行需允许 TCP 46702 入站。
+
+1.5.2.0：独立的原生更新窗口显示安装进度；在切换版本前复制完整安装目录，验证新版启动，失败时恢复并重启旧版。GitHub 代码更新包包含 `Updater.exe`，不包含游戏素材。
