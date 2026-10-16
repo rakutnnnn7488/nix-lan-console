@@ -147,6 +147,7 @@ namespace NixLanConsole
         private readonly CheckedListBox Games;
         private readonly CheckBox AutoUpdate;
         private readonly CheckBox HostAutoUpdate;
+        private readonly TextBox HostAddress;
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
         private readonly Button InstallButton;
@@ -175,6 +176,9 @@ namespace NixLanConsole
             AutoUpdate = new CheckBox { Text = "副机自动更新", Checked = State.autoUpdate, Width = 600, Height = 38 };
             HostAutoUpdate = new CheckBox { Text = "主机自动更新（游戏运行时暂缓）", Checked = State.hostAutoUpdate, Width = 600, Height = 38 };
             versionLayout.Controls.Add(AutoUpdate); versionLayout.Controls.Add(HostAutoUpdate);
+            versionLayout.Controls.Add(new Label { Text = "主机 IPv4 地址（当前主机：192.168.1.7）", Width = 600, Height = 25, Padding = new Padding(0, 5, 0, 0) });
+            HostAddress = new TextBox { Text = State.hostAddress ?? "192.168.1.7", Width = 300, Height = 28 };
+            versionLayout.Controls.Add(HostAddress);
             var versionActions = new FlowLayoutPanel { Width = 610, Height = 50 };
             var saveVersion = MakeButton("保存设置"); saveVersion.Click += delegate { SaveGames(); };
             var check = MakeButton("检查 GitHub 更新"); check.Click += delegate { ThreadPool.QueueUserWorkItem(delegate { try { DisplayServer.CheckNativeRelease(); } catch { } }); };
@@ -193,7 +197,7 @@ namespace NixLanConsole
         {
             var excluded = new List<string>();
             foreach (object item in Games.Items) if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
-            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
+            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         private void PurgeSelected()
