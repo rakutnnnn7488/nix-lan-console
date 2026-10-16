@@ -26,6 +26,9 @@ namespace NixLanConsole
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) { StartupDiagnostics.Write("UI crash: " + e.Exception); Environment.Exit(1); };
+                AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e) { StartupDiagnostics.Write("Unhandled crash: " + e.ExceptionObject); };
+                StartupDiagnostics.Write("launch version=" + BuildInfo.Version + " role=" + (args.Length == 0 ? "picker" : args[0]) + " pid=" + Process.GetCurrentProcess().Id);
                 if (args.Length > 0 && args[0] == "--sensor")
                 {
                     bool created;
@@ -49,8 +52,23 @@ namespace NixLanConsole
             }
             catch (Exception ex)
             {
+                StartupDiagnostics.Write("startup failure: " + ex);
                 MessageBox.Show(ex.Message, "局域网桌面控制台", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+    }
+
+    internal static class StartupDiagnostics
+    {
+        private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+        public static void Write(string message)
+        {
+            try { Directory.CreateDirectory(DataDir); File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " " + message + Environment.NewLine, Encoding.UTF8); } catch { }
+        }
+        public static void Ready(string role)
+        {
+            try { Directory.CreateDirectory(DataDir); File.WriteAllText(Path.Combine(DataDir, "startup-ready.txt"), Process.GetCurrentProcess().Id + "|" + BuildInfo.Version + "|" + role, Encoding.UTF8); } catch { }
+            Write("ready version=" + BuildInfo.Version + " role=" + role + " pid=" + Process.GetCurrentProcess().Id);
         }
     }
 
@@ -175,6 +193,7 @@ namespace NixLanConsole
             using (var udp = new UdpClient())
             {
                 udp.EnableBroadcast = true;
+                StartupDiagnostics.Ready("--sensor");
                 while (true)
                 {
                     var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames(), catalog = GetGameCatalog() };
@@ -363,7 +382,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.5.0.1"; }
+    internal static class BuildInfo { public const string Version = "1.5.0.2"; }
 
     internal static class DisplayServer
     {
@@ -414,6 +433,7 @@ namespace NixLanConsole
             UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
             Tray = new TrayContext();
             var udpThread = new Thread(ReadUdp) { IsBackground = true }; udpThread.Start();
+            StartupDiagnostics.Ready("--display");
             Application.Run(Tray);
         }
         internal static void CheckForUpdate(object ignored)
@@ -454,6 +474,12 @@ namespace NixLanConsole
                     { available = githubVersion; sourceZip = githubZip; }
                 }
                 if (sourceZip == null) { SetUpdateProgress("latest", 100, current.ToString(), "当前版本已是最新版本 " + current + "。"); return; }
+                string failedUpdate = Path.Combine(DataDir, "failed-update.txt");
+                if (!force && File.Exists(failedUpdate) && String.Equals(File.ReadAllText(failedUpdate, Encoding.UTF8).Trim(), available.ToString(), StringComparison.OrdinalIgnoreCase) && DateTime.UtcNow - File.GetLastWriteTimeUtc(failedUpdate) < TimeSpan.FromHours(24))
+                {
+                    SetUpdateProgress("failed", -1, available.ToString(), "版本 " + available + " 上次安装失败，已暂停自动重试。可在设置中手动重试。");
+                    return;
+                }
                 SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在验证并准备安装…");
                 string updateDir = Path.Combine(DataDir, "updates"); Directory.CreateDirectory(updateDir);
                 string localZip = Path.Combine(updateDir, Path.GetFileName(sourceZip));
@@ -568,23 +594,31 @@ namespace NixLanConsole
         private static string Quote(string s) { return "\"" + (s ?? "").Replace("\"", "\\\"") + "\""; }
         private static void ReadUdp()
         {
-            using (var udp = new UdpClient(UdpPort))
+            while (true)
             {
-                while (true)
+                try
                 {
-                    try
+                    using (var udp = new UdpClient(UdpPort))
                     {
-                        IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                        byte[] data = udp.Receive(ref remote);
-                        MetricPacket p = Json.Deserialize<MetricPacket>(Encoding.UTF8.GetString(data));
-                        if (p == null) continue;
-                        lock (Gate) Update(p);
-                        byte[] reply;
-                        lock (Gate) reply = Encoding.UTF8.GetBytes(Json.Serialize(new ControlPacket { excludedGames = Settings.excludedGames, hostAutoUpdate = Settings.hostAutoUpdate }));
-                        try { udp.Send(reply, reply.Length, remote); } catch { }
+                        StartupDiagnostics.Write("UDP listener ready port=" + UdpPort);
+                        while (true)
+                        {
+                            try
+                            {
+                                IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                                byte[] data = udp.Receive(ref remote);
+                                MetricPacket p = Json.Deserialize<MetricPacket>(Encoding.UTF8.GetString(data));
+                                if (p == null) continue;
+                                lock (Gate) Update(p);
+                                byte[] reply;
+                                lock (Gate) reply = Encoding.UTF8.GetBytes(Json.Serialize(new ControlPacket { excludedGames = Settings.excludedGames, hostAutoUpdate = Settings.hostAutoUpdate }));
+                                try { udp.Send(reply, reply.Length, remote); } catch { }
+                            }
+                            catch (Exception ex) { StartupDiagnostics.Write("UDP packet error: " + ex.Message); }
+                        }
                     }
-                    catch { }
                 }
+                catch (Exception ex) { StartupDiagnostics.Write("UDP listener retry: " + ex.Message); Thread.Sleep(5000); }
             }
         }
         private static void Update(MetricPacket p)
@@ -807,6 +841,7 @@ namespace NixLanConsole
         {
             Dispatcher = new Control();
             IntPtr dispatcherHandle = Dispatcher.Handle;
+            Dashboard = new NativeConsoleWindow();
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开控制台", null, delegate { OpenDashboard(); });
             menu.Items.Add("退出程序", null, delegate { Environment.Exit(0); });
