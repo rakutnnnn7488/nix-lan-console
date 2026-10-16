@@ -179,28 +179,26 @@ namespace NixLanConsoleSetup
                     string readyFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole", "startup-ready.txt");
                     if (File.Exists(readyFile)) File.Delete(readyFile);
                     started = Process.Start(new ProcessStartInfo(exe, role) { UseShellExecute = true, WorkingDirectory = target });
-                    using (var process = started)
+                    if (started == null) throw new InvalidOperationException("Windows 未能启动安装后的程序。");
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(String.IsNullOrEmpty(role) ? 3 : 15);
+                    bool ready = String.IsNullOrEmpty(role);
+                    while (DateTime.UtcNow < deadline)
                     {
-                        if (process == null) throw new InvalidOperationException("Windows 未能启动安装后的程序。");
-                        DateTime deadline = DateTime.UtcNow.AddSeconds(String.IsNullOrEmpty(role) ? 3 : 15);
-                        bool ready = String.IsNullOrEmpty(role);
-                        while (DateTime.UtcNow < deadline)
+                        started.Refresh();
+                        if (started.HasExited) throw new InvalidOperationException("新版本启动后立即退出。安装已回滚，请稍后重试。");
+                        if (!String.IsNullOrEmpty(role) && File.Exists(readyFile))
                         {
-                            process.Refresh();
-                            if (process.HasExited) throw new InvalidOperationException("新版本启动后立即退出。安装已回滚，请稍后重试。");
-                            if (!String.IsNullOrEmpty(role) && File.Exists(readyFile))
-                            {
-                                string[] parts = File.ReadAllText(readyFile).Trim().TrimStart('\uFEFF').Split('|');
-                                if (parts.Length >= 3 && parts[0] == process.Id.ToString() && parts[1] == Version && parts[2] == role) { ready = true; break; }
-                            }
-                            System.Threading.Thread.Sleep(250);
+                            string[] parts = File.ReadAllText(readyFile).Trim().TrimStart('\uFEFF').Split('|');
+                            if (parts.Length >= 3 && parts[0] == started.Id.ToString() && parts[1] == Version && parts[2] == role) { ready = true; break; }
                         }
-                        if (!ready) throw new InvalidOperationException("程序没有报告启动就绪。安装已回滚，请稍后重试。");
+                        System.Threading.Thread.Sleep(250);
                     }
+                    if (!ready) throw new InvalidOperationException("程序没有报告启动就绪。安装已回滚，请稍后重试。");
+                    started.Dispose(); started = null;
                 }
                 catch
                 {
-                    try { if (started != null && !started.HasExited) { started.Kill(); started.WaitForExit(5000); } } catch { }
+                    try { if (started != null) { if (!started.HasExited) { started.Kill(); started.WaitForExit(5000); } started.Dispose(); } } catch { }
                     if (movedNew && Directory.Exists(target)) Directory.Delete(target, true);
                     if (movedOld && Directory.Exists(backup)) Directory.Move(backup, target);
                     throw;
@@ -232,12 +230,17 @@ namespace NixLanConsoleSetup
             int result = 0;
             try
             {
+                bool injectedFailure = false;
                 try { form.Install(target, worker, true, simulateFailure); }
-                catch (Exception) { if (!simulateFailure) throw; }
+                catch (Exception ex)
+                {
+                    if (!simulateFailure || ex.Message != "模拟安装后校验失败") throw;
+                    injectedFailure = true;
+                }
                 backups = Directory.GetDirectories(Path.GetDirectoryName(target), Path.GetFileName(target) + ".backup-*");
                 if (simulateFailure)
                 {
-                    if (!File.Exists(Path.Combine(target, "legacy.marker")) || File.Exists(Path.Combine(target, "ControlConsole.exe"))) result = 11;
+                    if (!injectedFailure || !File.Exists(Path.Combine(target, "legacy.marker")) || File.Exists(Path.Combine(target, "ControlConsole.exe"))) result = 11;
                 }
                 else
                 {
