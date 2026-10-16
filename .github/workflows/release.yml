@@ -4,7 +4,6 @@ on:
     branches: [main]
     paths:
       - 'src/**'
-      - 'console-game-faithful.html'
       - 'ApplyUpdate.ps1'
       - 'build.ps1'
       - 'version.txt'
@@ -23,7 +22,7 @@ jobs:
           $version = (Get-Content version.txt -Raw).Trim()
           if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'version.txt must have four numeric parts' }
           powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
-          Compress-Archive -Path build\ControlConsole.exe,build\ApplyUpdate.ps1,build\version.txt,build\console-game-faithful.html -DestinationPath "ControlConsole-update-$version.zip" -CompressionLevel Optimal
+          Compress-Archive -Path build\ControlConsole.exe,build\ApplyUpdate.ps1,build\version.txt -DestinationPath "ControlConsole-update-$version.zip" -CompressionLevel Optimal
           "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
       - name: Publish release if missing
         shell: pwsh
