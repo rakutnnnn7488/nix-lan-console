@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory=$true)][string]$TargetDir,
     [Parameter(Mandatory=$true)][string]$Archive,
     [Parameter(Mandatory=$true)][int]$ParentPid,
