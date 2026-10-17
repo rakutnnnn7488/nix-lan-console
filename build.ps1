@@ -11,7 +11,8 @@ if ($LASTEXITCODE -ne 0) { throw "C# compilation failed:$LASTEXITCODE" }
 if ($LASTEXITCODE -ne 0) { throw "Updater compilation failed:$LASTEXITCODE" }
 Copy-Item (Join-Path $PSScriptRoot 'ApplyUpdate.ps1'),(Join-Path $PSScriptRoot 'version.txt'),(Join-Path $PSScriptRoot 'OpenHostTcpPort.ps1') -Destination $OutputDir -Force
 if ($GameAssetsDir) {
-    $assetNames = @('bg_stream_native.png','sidebar_noon.png','sidebar_evening.png','sidebar_night.png','window_active.png','button_start.png','start_pressed.png')
+    $assetNames = @('bg_stream_native.png','sidebar_noon.png','sidebar_evening.png','sidebar_night.png','window_active.png','window_inactive.png','button_start.png','start_pressed.png','jine_bg.png','zpix.ttf','icon_desktop_youtube.png','icon_desktop_asobu.png','icon_desktop_neru.png','icon_desktop_okusuri.png','icon_desktop_internet.png','icon_desktop_odekake.png','icon_status_follower.png','icon_status_stress.png','icon_status_love.png','icon_status_yami.png')
+    if (Test-Path -LiteralPath (Join-Path $GameAssetsDir 'desktop_wallpaper.png') -PathType Leaf) { $assetNames += 'desktop_wallpaper.png' }
     $assetTarget = Join-Path $OutputDir 'game-assets'
     New-Item -ItemType Directory -Path $assetTarget -Force | Out-Null
     foreach ($name in $assetNames) {
