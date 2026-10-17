@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，目前为 **1.6.2.0 本地候选版**。本地源码版本不代表 GitHub 主分支或 Release 已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，目前为 **1.6.2.1 本地候选版**。本地源码版本不代表 GitHub 主分支或 Release 已发布该版本。
 
 ## 构建
 
