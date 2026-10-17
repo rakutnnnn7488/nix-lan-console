@@ -289,6 +289,7 @@ namespace NixLanConsole
                 e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                 e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
                 e.Graphics.DrawImage(SideBackground, Rail.ClientRectangle, new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
+                e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, Rail.Width, Rail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
             }
         }
 
@@ -300,6 +301,7 @@ namespace NixLanConsole
             e.Graphics.TranslateTransform(RightRail.Width, 0);
             e.Graphics.ScaleTransform(-1, 1);
             e.Graphics.DrawImage(SideBackground, new Rectangle(0, 0, RightRail.Width, RightRail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
+            e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, RightRail.Width, RightRail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
             e.Graphics.ResetTransform();
         }
 
