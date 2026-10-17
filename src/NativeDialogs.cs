@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Text;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -34,6 +35,8 @@ namespace NixLanConsole
 
     internal sealed class NativeRecordsDialog : NativeDialog
     {
+        private readonly PrivateFontCollection PixelFonts = new PrivateFontCollection();
+        private Font PixelFont;
         private readonly ComboBox Range;
         private readonly DateTimePicker From;
         private readonly DateTimePicker To;
@@ -44,7 +47,24 @@ namespace NixLanConsole
 
         public NativeRecordsDialog() : base("游戏运行记录", 940, 680)
         {
-            var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 57, Padding = new Padding(12, 9, 0, 0) };
+            FormBorderStyle = FormBorderStyle.None;
+            Padding = new Padding(4);
+            BackColor = Color.FromArgb(64, 48, 150);
+            string fontPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "game-assets", "zpix.ttf");
+            if (System.IO.File.Exists(fontPath))
+            {
+                try { PixelFonts.AddFontFile(fontPath); PixelFont = new Font(PixelFonts.Families[0], 16, FontStyle.Regular, GraphicsUnit.Pixel); Font = PixelFont; }
+                catch { PixelFont = null; }
+            }
+            var title = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Color.FromArgb(226, 186, 233) };
+            var titleText = new Label { Text = "■ 游戏记录  /  GAME LOG", Dock = DockStyle.Fill, Padding = new Padding(10, 0, 0, 0), TextAlign = ContentAlignment.MiddleLeft, ForeColor = Ink };
+            var close = MakeButton("×"); close.AutoSize = false; close.Size = new Size(28, 26); close.Dock = DockStyle.Right;
+            close.Click += delegate { Close(); };
+            title.Controls.Add(titleText); title.Controls.Add(close);
+            Point dragPoint = Point.Empty;
+            titleText.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) dragPoint = e.Location; };
+            titleText.MouseMove += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) Location = new Point(Left + e.X - dragPoint.X, Top + e.Y - dragPoint.Y); };
+            var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 57, Padding = new Padding(12, 9, 0, 0), BackColor = Color.FromArgb(248, 235, 250) };
             top.Controls.Add(new Label { Text = "统计时间：", AutoSize = true, Margin = new Padding(4, 8, 4, 0) });
             Range = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 115 };
             Range.Items.AddRange(new object[] { "今天", "最近 7 天", "最近 30 天", "全部", "自定义" }); Range.SelectedIndex = 1;
@@ -57,19 +77,52 @@ namespace NixLanConsole
             var reload = MakeButton("刷新"); reload.Click += delegate { RefreshRecords(); }; top.Controls.Add(reload);
             Controls.Add(top);
 
-            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 7) };
+            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 7), Appearance = TabAppearance.FlatButtons };
             Totals = MakeGrid(); Totals.Columns.Add("game", "游戏"); Totals.Columns.Add("duration", "时长");
             Sessions = MakeGrid(); Sessions.Columns.Add("game", "游戏"); Sessions.Columns.Add("start", "开始"); Sessions.Columns.Add("end", "结束"); Sessions.Columns.Add("duration", "时长");
-            var totalsTab = new TabPage("游戏汇总"); totalsTab.Controls.Add(Totals);
-            var sessionsTab = new TabPage("逐次记录"); sessionsTab.Controls.Add(Sessions);
+            StyleGrid(Totals); StyleGrid(Sessions);
+            var totalsTab = new TabPage("游戏汇总") { BackColor = Color.FromArgb(248, 235, 250) }; totalsTab.Controls.Add(Totals);
+            var sessionsTab = new TabPage("逐次记录") { BackColor = Color.FromArgb(248, 235, 250) }; sessionsTab.Controls.Add(Sessions);
             tabs.TabPages.Add(totalsTab); tabs.TabPages.Add(sessionsTab); Controls.Add(tabs);
 
-            var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 84, Padding = new Padding(12, 6, 0, 0), FlowDirection = FlowDirection.LeftToRight };
+            var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 84, Padding = new Padding(12, 6, 0, 0), FlowDirection = FlowDirection.LeftToRight, BackColor = Color.FromArgb(248, 235, 250) };
             Summary = new Label { Text = "", Width = 360, Height = 55, TextAlign = ContentAlignment.MiddleLeft };
             var edit = MakeButton("修改选中记录"); edit.Click += delegate { EditSelected(); };
             var remove = MakeButton("删除选中记录"); remove.Click += delegate { DeleteSelected(); };
             bottom.Controls.Add(Summary); bottom.Controls.Add(edit); bottom.Controls.Add(remove); Controls.Add(bottom);
+            var content = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 235, 250) };
+            title.Dock = top.Dock = tabs.Dock = bottom.Dock = DockStyle.None;
+            content.Controls.Add(title); content.Controls.Add(top); content.Controls.Add(tabs); content.Controls.Add(bottom);
+            Action arrange = delegate
+            {
+                int width = content.ClientSize.Width, height = content.ClientSize.Height;
+                title.Bounds = new Rectangle(0, 0, width, 34);
+                top.Bounds = new Rectangle(0, 34, width, 57);
+                bottom.Bounds = new Rectangle(0, Math.Max(91, height - 84), width, 84);
+                tabs.Bounds = new Rectangle(0, 91, width, Math.Max(0, height - 175));
+            };
+            content.Resize += delegate { arrange(); };
+            Controls.Add(content); arrange();
+            FormClosed += delegate { if (PixelFont != null) PixelFont.Dispose(); PixelFonts.Dispose(); };
             RefreshRecords();
+        }
+
+        private void StyleGrid(DataGridView grid)
+        {
+            grid.BorderStyle = BorderStyle.None;
+            grid.BackgroundColor = Color.FromArgb(248, 235, 250);
+            grid.GridColor = Color.FromArgb(190, 153, 216);
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.EnableHeadersVisualStyles = false;
+            grid.ColumnHeadersHeight = 36;
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(208, 191, 235);
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = Ink;
+            grid.DefaultCellStyle.BackColor = Color.FromArgb(251, 242, 251);
+            grid.DefaultCellStyle.ForeColor = Ink;
+            grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(165, 205, 234);
+            grid.DefaultCellStyle.SelectionForeColor = Ink;
+            grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(238, 221, 246);
+            grid.RowTemplate.Height = 32;
         }
 
         private void ToggleRange() { bool custom = Range.SelectedIndex == 4; From.Visible = custom; To.Visible = custom; }
@@ -147,6 +200,7 @@ namespace NixLanConsole
         private readonly CheckedListBox Games;
         private readonly CheckBox AutoUpdate;
         private readonly CheckBox HostAutoUpdate;
+        private readonly TextBox HostAddress;
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
         private readonly Button InstallButton;
@@ -175,6 +229,9 @@ namespace NixLanConsole
             AutoUpdate = new CheckBox { Text = "副机自动更新", Checked = State.autoUpdate, Width = 600, Height = 38 };
             HostAutoUpdate = new CheckBox { Text = "主机自动更新（游戏运行时暂缓）", Checked = State.hostAutoUpdate, Width = 600, Height = 38 };
             versionLayout.Controls.Add(AutoUpdate); versionLayout.Controls.Add(HostAutoUpdate);
+            versionLayout.Controls.Add(new Label { Text = "主机 IPv4 地址（当前主机：192.168.1.7）", Width = 600, Height = 25, Padding = new Padding(0, 5, 0, 0) });
+            HostAddress = new TextBox { Text = State.hostAddress ?? "192.168.1.7", Width = 300, Height = 28 };
+            versionLayout.Controls.Add(HostAddress);
             var versionActions = new FlowLayoutPanel { Width = 610, Height = 50 };
             var saveVersion = MakeButton("保存设置"); saveVersion.Click += delegate { SaveGames(); };
             var check = MakeButton("检查 GitHub 更新"); check.Click += delegate { ThreadPool.QueueUserWorkItem(delegate { try { DisplayServer.CheckNativeRelease(); } catch { } }); };
@@ -193,7 +250,7 @@ namespace NixLanConsole
         {
             var excluded = new List<string>();
             foreach (object item in Games.Items) if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
-            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
+            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         private void PurgeSelected()

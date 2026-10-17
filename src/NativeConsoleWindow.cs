@@ -5,6 +5,7 @@ using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Drawing.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -17,31 +18,62 @@ namespace NixLanConsole
         private readonly Label HostState;
         private readonly Label CharacterState;
         private readonly Label[] MetricValues = new Label[4];
+        private readonly Label[] MetricNames = new Label[4];
         private readonly Panel[] MetricFills = new Panel[4];
+        private readonly PictureBox[] MetricIcons = new PictureBox[4];
+        private readonly List<Image> MetricIconImages = new List<Image>();
         private readonly Label GameList;
+        private readonly PictureBox RecordAvatar;
+        private readonly PictureBox RecordTail;
+        private readonly Label RecordsOpenHint;
         private readonly Panel Chart;
         private readonly Panel CharacterCanvas;
         private readonly Panel Desktop;
         private readonly Panel Rail;
+        private readonly Panel RightRail;
         private readonly Panel Taskbar;
         private readonly Button StartButton;
+        private readonly Button LiveTab;
         private readonly Label TaskbarStatus;
         private readonly Panel CharacterCard;
         private readonly Panel StatsCard;
         private readonly Panel RecordsCard;
+        private readonly Panel LiveCard;
+        private readonly Panel LiveCanvas;
+        private readonly Panel TransitionOverlay;
         private readonly Timer RefreshTimer;
         private readonly Timer AnimationTimer;
         private readonly List<double[]> Samples = new List<double[]>();
         private readonly List<RoleClip> AmeClips = new List<RoleClip>();
         private readonly List<RoleClip> KangelClips = new List<RoleClip>();
+        private readonly Dictionary<RoleScene, List<RoleClip>> SceneClips = new Dictionary<RoleScene, List<RoleClip>>();
         private readonly Dictionary<string, Image> FrameCache = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
         private readonly Random Randomizer = new Random();
         private Image CharacterBackground;
         private Image SideBackground;
+        private Image DesktopBackground;
+        private readonly Dictionary<string, Image> DesktopIcons = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<Control> ShortcutControls = new List<Control>();
         private Image WindowFrame;
+        private Image WindowInactiveFrame;
+        private Image CardMinimizeImage;
+        private Image CardMaximizeImage;
+        private Image CardCloseImage;
+        private Image JineBackground;
+        private Image LiveTemplate;
+        private DateTime TransformationStarted;
+        private bool Transforming;
+        private bool PreviousGameRunning;
+        private string LiveGameName = "";
+        private Panel ActiveCard;
+        private PrivateFontCollection PixelFonts;
+        private Font PixelText;
+        private Font PixelSmallText;
+        private Font PixelTinyText;
         private Image StartBackground;
         private Image StartPressedBackground;
         private RoleClip CurrentClip;
+        private RoleScene CurrentScene;
         private Image DisplayedFrame;
         private DateTime ClipStarted;
         private bool IsKangel;
@@ -62,71 +94,112 @@ namespace NixLanConsole
             Font = new Font("Microsoft YaHei UI", 10F);
             DoubleBuffered = true;
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = Color.FromArgb(225, 203, 239) };
-            var title = new Label { Text = "▣  NIX LAN CONSOLE  /  DESKTOP", Dock = DockStyle.Left, Width = 420, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0), ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 10F, FontStyle.Bold) };
-            title.MouseDown += BeginDrag; title.MouseMove += ContinueDrag; title.MouseUp += EndDrag;
-            var minimize = WindowButton("—"); minimize.Dock = DockStyle.Right; minimize.Click += delegate { Hide(); };
-            var close = WindowButton("×"); close.Dock = DockStyle.Right; close.Click += delegate { Environment.Exit(0); };
-            top.Controls.Add(close); top.Controls.Add(minimize); top.Controls.Add(title);
-            Controls.Add(top);
-
             var body = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 237, 250) };
-            Rail = new Panel { Dock = DockStyle.Left, Width = 242, BackColor = Color.FromArgb(235, 220, 245), Padding = new Padding(12), BackgroundImageLayout = ImageLayout.Stretch };
-            var brand = new Label { Text = "AMENET\nDESKTOP", Dock = DockStyle.Top, Height = 78, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(69, 49, 150), Font = new Font("Consolas", 17F, FontStyle.Bold) };
-            Rail.Controls.Add(brand);
-            foreach (string name in new[] { "角色 / Webcam", "主机状态", "游戏记录", "设置" })
-            {
-                var button = new Button { Text = "▣  " + name, Dock = DockStyle.Top, Height = 47, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(62, 49, 137), BackColor = Color.FromArgb(242, 231, 248), Margin = new Padding(4) };
-                button.FlatAppearance.BorderColor = Color.FromArgb(150, 128, 187); Rail.Controls.Add(button); button.BringToFront();
-                string action = name;
-                button.Click += delegate
-                {
-                    if (action == "游戏记录") { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); }
-                    else if (action == "设置") OpenSettings();
-                    else if (action == "角色 / Webcam") CharacterCard.BringToFront();
-                    else StatsCard.BringToFront();
-                };
-            }
-            body.Controls.Add(Rail);
+            Rail = new BufferedPanel { Dock = DockStyle.Left, Width = 242, BackColor = Color.FromArgb(235, 220, 245) };
+            Rail.Paint += PaintLeftRail;
+            RightRail = new BufferedPanel { Dock = DockStyle.Right, Width = 242, BackColor = Color.FromArgb(235, 220, 245) };
+            RightRail.Paint += PaintRightRail;
+            var close = WindowButton("×");
+            var closeMenu = new ContextMenuStrip();
+            closeMenu.Items.Add("关闭界面（保留后台监控）", null, delegate { Hide(); });
+            closeMenu.Items.Add("退出整个程序", null, delegate { Environment.Exit(0); });
+            close.Click += delegate { closeMenu.Show(close, new Point(0, close.Height)); };
+            var minimize = WindowButton("—"); minimize.Click += delegate { Hide(); };
+            close.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            minimize.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            close.Location = new Point(RightRail.Width - 34, 2);
+            minimize.Location = new Point(RightRail.Width - 70, 2);
+            RightRail.Controls.Add(close); RightRail.Controls.Add(minimize);
+            body.Controls.Add(Rail); body.Controls.Add(RightRail);
 
-            Desktop = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(250, 235, 250) };
+            var center = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(250, 235, 250) };
+
+            Desktop = new BufferedPanel { BackColor = Color.FromArgb(250, 235, 250) };
             Desktop.Paint += PaintDesktop;
             var desktopMenu = new ContextMenuStrip();
             desktopMenu.Items.Add("恢复默认窗口位置", null, delegate { SavedPositions.Clear(); SaveLayout(); LayoutDesktop(); });
             Desktop.ContextMenuStrip = desktopMenu;
-            CharacterCard = Card("WEBCAM  /  CHARACTER", 716);
-            CharacterState = new Label { Text = "糖糖 · 日常待机 ♡", Dock = DockStyle.Bottom, Height = 44, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(64, 50, 147), Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) };
+            AddDesktopIcon("直播", "icon_desktop_youtube.png", 50, 55, delegate { FocusCard(CharacterCard); });
+            AddDesktopIcon("陪玩", "icon_desktop_asobu.png", 50, 175, delegate { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); });
+            AddDesktopIcon("睡觉", "icon_desktop_neru.png", 50, 295, delegate { Hide(); });
+            AddDesktopIcon("吃药", "icon_desktop_okusuri.png", 50, 415, delegate { FocusCard(StatsCard); });
+            AddDesktopIcon("因特网", "icon_desktop_internet.png", 50, 535, delegate { OpenSettings(); });
+            AddDesktopIcon("出门", "icon_desktop_odekake.png", 50, 655, delegate { Hide(); });
+
+            CharacterCard = Card("Webcam", 716);
+            CharacterState = new Label { Text = "糖糖 · 日常待机 ♡" };
             CharacterCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(252, 244, 251) };
             CharacterCanvas.Paint += PaintCharacter;
-            CharacterCard.Controls.Add(CharacterCanvas); CharacterCard.Controls.Add(CharacterState); Desktop.Controls.Add(CharacterCard);
+            CharacterCard.Controls.Add(CharacterCanvas); Desktop.Controls.Add(CharacterCard);
 
-            StatsCard = Card("HOST STATUS", 392);
-            var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(0) };
+            StatsCard = Card("任务管理器", 392);
+            var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(9, 6, 9, 7), BackColor = Color.FromArgb(250, 242, 251) };
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 18));
             metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 28));
-            HostState = new Label { Text = "主机离线", Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(82, 79, 153), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) }; metrics.Controls.Add(HostState, 0, 0);
+            HostState = new Label { Text = "主机离线", Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(82, 79, 153), BackColor = Color.FromArgb(224, 211, 242), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) }; metrics.Controls.Add(HostState, 0, 0);
             string[] metricNames = { "CPU", "内存", "GPU", "温度" };
             for (int i = 0; i < metricNames.Length; i++)
             {
-                var row = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 3) };
-                MetricValues[i] = new Label { Text = "—", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 10F, FontStyle.Bold) };
-                var name = new Label { Text = metricNames[i], Dock = DockStyle.Left, Width = 48, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(100, 86, 159), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
-                var track = new Panel { Dock = DockStyle.Bottom, Height = 9, BackColor = Color.FromArgb(222, 207, 234) };
-                MetricFills[i] = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = i == 1 ? Color.FromArgb(111, 178, 212) : Color.FromArgb(118, 102, 192) }; track.Controls.Add(MetricFills[i]);
-                row.Controls.Add(MetricValues[i]); row.Controls.Add(name); row.Controls.Add(track); metrics.Controls.Add(row, 0, i + 1);
+                int rowIndex = i;
+                var row = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 3, 0, 3), BackColor = Color.FromArgb(250, 242, 251) };
+                MetricIcons[i] = new PictureBox { Location = new Point(0, 2), Size = new Size(42, 36), SizeMode = PictureBoxSizeMode.Zoom };
+                MetricValues[i] = new Label { Text = "—", Location = new Point(51, 18), Size = new Size(155, 25), TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 13F, FontStyle.Bold) };
+                var name = new Label { Text = metricNames[i], Location = new Point(51, 0), Size = new Size(160, 19), TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(97, 165, 192), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
+                MetricNames[i] = name;
+                var track = new Panel { Height = 22, BackColor = Color.FromArgb(218, 191, 230), BorderStyle = BorderStyle.FixedSingle };
+                MetricFills[i] = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = Color.FromArgb(105, 179, 211) }; track.Controls.Add(MetricFills[i]);
+                row.Controls.Add(MetricIcons[i]); row.Controls.Add(name); row.Controls.Add(MetricValues[i]); row.Controls.Add(track);
+                row.Resize += delegate
+                {
+                    bool compact = row.Height < 40;
+                    int trackWidth = Math.Min(125, Math.Max(65, row.Width / 3));
+                    track.Height = compact ? 12 : 22;
+                    track.Bounds = new Rectangle(row.Width - trackWidth - 1, Math.Max(2, (row.Height - track.Height) / 2), trackWidth, track.Height);
+                    MetricIcons[rowIndex].Bounds = new Rectangle(0, 0, compact ? 34 : 42, compact ? 28 : 36);
+                    name.Location = new Point(compact ? 39 : 51, 0);
+                    name.Width = Math.Max(46, track.Left - name.Left);
+                    name.Height = compact ? 12 : 19;
+                    MetricValues[rowIndex].Location = new Point(compact ? 39 : 51, compact ? 11 : 18);
+                    MetricValues[rowIndex].Height = compact ? 13 : 24;
+                    MetricValues[rowIndex].Width = Math.Max(52, track.Left - MetricValues[rowIndex].Left);
+                    if (PixelSmallText != null)
+                    {
+                        MetricValues[rowIndex].Font = compact ? PixelSmallText : PixelText;
+                        name.Font = compact ? PixelTinyText : PixelSmallText;
+                    }
+                };
+                metrics.Controls.Add(row, 0, i + 1);
             }
 
-            Chart = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 248, 255), Margin = new Padding(0, 4, 0, 0) };
+            Chart = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(244, 232, 250), Margin = new Padding(0, 4, 0, 0) };
             Chart.Paint += PaintChart;
             metrics.Controls.Add(Chart, 0, 5); StatsCard.Controls.Add(metrics); Desktop.Controls.Add(StatsCard);
 
-            RecordsCard = Card("GAME RECORDS  /  LAST 7 DAYS", 615);
-            GameList = new Label { Text = "等待主机游戏记录…", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(70, 59, 143), Font = new Font("Microsoft YaHei UI", 10F), Padding = new Padding(4, 10, 4, 4) };
-            RecordsCard.Controls.Add(GameList); Desktop.Controls.Add(RecordsCard); body.Controls.Add(Desktop); Controls.Add(body);
-            top.SendToBack(); Rail.SendToBack();
-            Taskbar = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Color.FromArgb(247, 224, 247), Padding = new Padding(4, 4, 4, 4) };
+            RecordsCard = Card("游戏记录", 615);
+            var jine = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(228, 155, 233), BackgroundImageLayout = ImageLayout.Stretch };
+            var dayBadge = new Label { Text = "第 1 天  /  主机游戏日志  /  最近 7 天", TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(206, 210, 239), ForeColor = Color.FromArgb(63, 46, 144), Height = 35, Dock = DockStyle.Top };
+            RecordAvatar = new PictureBox { SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Transparent };
+            RecordTail = new PictureBox { SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Transparent };
+            GameList = new Label { Text = "等待主机游戏记录…", AutoEllipsis = true, ForeColor = Color.FromArgb(70, 59, 143), BackColor = Color.FromArgb(218, 237, 255), Font = new Font("Microsoft YaHei UI", 10F), Padding = new Padding(12), Cursor = Cursors.Hand };
+            GameList.Click += delegate { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); };
+            RecordsOpenHint = new Label { Text = "查看完整游戏记录  ▶", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(59, 55, 142), BackColor = Color.FromArgb(210, 239, 81), Cursor = Cursors.Hand };
+            RecordsOpenHint.Click += delegate { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); };
+            jine.Controls.Add(GameList); jine.Controls.Add(RecordTail); jine.Controls.Add(RecordAvatar); jine.Controls.Add(RecordsOpenHint); jine.Controls.Add(dayBadge);
+            jine.Resize += delegate { LayoutRecordMessages(jine); };
+            RecordsCard.Controls.Add(jine); Desktop.Controls.Add(RecordsCard);
+            LiveCard = Card("直播", 1336);
+            LiveCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 248, 255) };
+            LiveCanvas.Paint += PaintLive;
+            LiveCard.Controls.Add(LiveCanvas); LiveCard.Visible = false; Desktop.Controls.Add(LiveCard);
+            TransitionOverlay = new BufferedPanel { BackColor = Color.FromArgb(250, 235, 250), Visible = false };
+            TransitionOverlay.Paint += PaintTransformation;
+            Desktop.Controls.Add(TransitionOverlay);
+            center.Controls.Add(Desktop); body.Controls.Add(center); Controls.Add(body);
+            FocusCard(RecordsCard);
+            Rail.SendToBack(); RightRail.SendToBack();
+            Taskbar = new BufferedPanel { Height = 40, BackColor = Color.FromArgb(247, 224, 247), Padding = new Padding(4, 5, 4, 5) };
             Taskbar.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Color.FromArgb(89, 62, 156), 2)) e.Graphics.DrawLine(pen, 0, 1, Taskbar.Width, 1); };
             StartButton = new Button { Text = "开始", Dock = DockStyle.Left, Width = 136, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(38, 31, 94), BackColor = Color.FromArgb(246, 222, 249), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), BackgroundImageLayout = ImageLayout.Stretch };
             StartButton.FlatAppearance.BorderSize = 0;
@@ -134,22 +207,39 @@ namespace NixLanConsole
             StartButton.MouseDown += delegate { if (StartPressedBackground != null) StartButton.BackgroundImage = StartPressedBackground; };
             StartButton.MouseUp += delegate { StartButton.BackgroundImage = StartBackground; };
             Taskbar.Controls.Add(StartButton);
-            foreach (string tabName in new[] { "▣  WEBCAM", "▣  HOST STATUS", "▣  GAME RECORDS" })
+            foreach (string tabName in new[] { "▣  任务管理器", "▣  Webcam", "▣  JINE", "▣  直播" })
             {
-                var tab = new Button { Text = tabName, Dock = DockStyle.Left, Width = 176, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.FromArgb(238, 211, 242), ForeColor = Color.FromArgb(65, 48, 145), Font = new Font("Consolas", 9F, FontStyle.Bold) };
+                var tab = new Button { Text = tabName, Dock = DockStyle.Left, Width = 160, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.FromArgb(238, 211, 242), ForeColor = Color.FromArgb(65, 48, 145), Font = new Font("Consolas", 9F, FontStyle.Bold) };
                 tab.FlatAppearance.BorderColor = Color.FromArgb(116, 91, 173);
                 string selected = tabName;
-                tab.Click += delegate { if (selected.Contains("GAME")) { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); } else if (selected.Contains("HOST")) StatsCard.BringToFront(); else CharacterCard.BringToFront(); };
+                tab.Click += delegate { if (selected.Contains("直播")) { if (LiveCard.Visible) FocusCard(LiveCard); } else if (selected.Contains("JINE")) FocusCard(RecordsCard); else if (selected.Contains("任务")) FocusCard(StatsCard); else FocusCard(CharacterCard); };
+                if (selected.Contains("直播")) { LiveTab = tab; tab.Visible = false; }
                 Taskbar.Controls.Add(tab); tab.BringToFront();
             }
             TaskbarStatus = new Label { Text = "○ 主机离线", Dock = DockStyle.Right, Width = 230, TextAlign = ContentAlignment.MiddleRight, ForeColor = Color.FromArgb(73, 55, 147), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
             Taskbar.Controls.Add(TaskbarStatus);
-            Controls.Add(Taskbar); Taskbar.SendToBack();
+            center.Controls.Add(Taskbar); Taskbar.BringToFront();
+            center.Resize += delegate
+            {
+                Taskbar.Bounds = new Rectangle(0, center.Height - Taskbar.Height, center.Width, Taskbar.Height);
+                Desktop.Bounds = new Rectangle(0, 0, center.Width, Math.Max(0, center.Height - Taskbar.Height));
+                Taskbar.BringToFront();
+            };
             Desktop.Resize += delegate { LayoutDesktop(); };
-            Resize += delegate { Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920)); Taskbar.Height = Math.Max(40, (int)(ClientSize.Height * 40.0 / 1080)); StartButton.Width = Math.Max(136, (int)(ClientSize.Width * 136.0 / 1920)); LayoutDesktop(); };
-            Rail.Width = Math.Max(180, (int)(ClientSize.Width * 242.0 / 1920));
-            Taskbar.Height = Math.Max(40, (int)(ClientSize.Height * 40.0 / 1080));
-            StartButton.Width = Math.Max(136, (int)(ClientSize.Width * 136.0 / 1920));
+            Resize += delegate
+            {
+                Rail.Width = RightRail.Width = Math.Max(90, (int)(ClientSize.Width * 242.0 / 1920));
+                Taskbar.Height = Math.Max(30, (int)(ClientSize.Height * 40.0 / 1080));
+                StartButton.Width = Math.Max(90, (int)(ClientSize.Width * 136.0 / 1920));
+                Taskbar.Bounds = new Rectangle(0, center.Height - Taskbar.Height, center.Width, Taskbar.Height);
+                Desktop.Bounds = new Rectangle(0, 0, center.Width, Math.Max(0, center.Height - Taskbar.Height));
+                LayoutDesktop();
+            };
+            Rail.Width = RightRail.Width = Math.Max(90, (int)(ClientSize.Width * 242.0 / 1920));
+            Taskbar.Height = Math.Max(30, (int)(ClientSize.Height * 40.0 / 1080));
+            StartButton.Width = Math.Max(90, (int)(ClientSize.Width * 136.0 / 1920));
+            Taskbar.Bounds = new Rectangle(0, center.Height - Taskbar.Height, center.Width, Taskbar.Height);
+            Desktop.Bounds = new Rectangle(0, 0, center.Width, Math.Max(0, center.Height - Taskbar.Height));
             LoadLayout();
             LayoutDesktop();
 
@@ -160,9 +250,15 @@ namespace NixLanConsole
             AnimationTimer = new Timer { Interval = 83 };
             AnimationTimer.Tick += delegate
             {
-                if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >= CurrentClip.Duration) SelectRoleClip(IsKangel, IsGameRunning);
+                if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >= CurrentClip.Duration) SelectRoleClip(CurrentScene);
                 Image frame = CurrentFrame();
                 if (!Object.ReferenceEquals(frame, DisplayedFrame)) { DisplayedFrame = frame; CharacterCanvas.Invalidate(); }
+                if (Transforming)
+                {
+                    if ((DateTime.UtcNow - TransformationStarted).TotalSeconds >= 3.8) FinishTransformation();
+                    else TransitionOverlay.Invalidate();
+                }
+                else if (LiveCard.Visible) LiveCanvas.Invalidate();
             };
             AnimationTimer.Start();
             FormClosed += delegate
@@ -170,32 +266,129 @@ namespace NixLanConsole
                 RefreshTimer.Stop(); AnimationTimer.Stop();
                 if (CharacterBackground != null) CharacterBackground.Dispose();
                 if (SideBackground != null) SideBackground.Dispose();
+                if (DesktopBackground != null) DesktopBackground.Dispose();
+                foreach (var image in DesktopIcons.Values) image.Dispose();
                 if (WindowFrame != null) WindowFrame.Dispose();
+                if (WindowInactiveFrame != null) WindowInactiveFrame.Dispose();
+                if (CardMinimizeImage != null) CardMinimizeImage.Dispose();
+                if (CardMaximizeImage != null) CardMaximizeImage.Dispose();
+                if (CardCloseImage != null) CardCloseImage.Dispose();
+                if (JineBackground != null) JineBackground.Dispose();
+                if (LiveTemplate != null) LiveTemplate.Dispose();
+                if (RecordAvatar.Image != null) RecordAvatar.Image.Dispose();
+                if (RecordTail.Image != null) RecordTail.Image.Dispose();
+                if (PixelText != null) PixelText.Dispose();
+                if (PixelSmallText != null) PixelSmallText.Dispose();
+                if (PixelTinyText != null) PixelTinyText.Dispose();
+                if (PixelFonts != null) PixelFonts.Dispose();
                 if (StartBackground != null) StartBackground.Dispose();
                 if (StartPressedBackground != null) StartPressedBackground.Dispose();
                 foreach (var image in FrameCache.Values) image.Dispose();
+                foreach (var image in MetricIconImages) image.Dispose();
             };
             RefreshData();
         }
 
         private static Button WindowButton(string text)
         {
-            return new Button { Text = text, Width = 42, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(248, 238, 250), ForeColor = Color.FromArgb(65, 51, 142), Font = new Font("Consolas", 13F, FontStyle.Bold), Margin = new Padding(3) };
+            return new Button { Text = text, Width = 32, Height = 28, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(248, 238, 250), ForeColor = Color.FromArgb(65, 51, 142), Font = new Font("Consolas", 12F, FontStyle.Bold), Margin = new Padding(2) };
         }
 
         private void OpenSettings() { using (var dialog = new NativeSettingsDialog()) dialog.ShowDialog(this); }
 
+        private void FocusCard(Panel card)
+        {
+            ActiveCard = card;
+            card.Visible = true;
+            card.BringToFront();
+            foreach (var window in new[] { CharacterCard, StatsCard, RecordsCard }) if (window != null) window.Invalidate();
+        }
+
+        private void AddDesktopIcon(string label, string assetName, int x, int y, Action action)
+        {
+            var icon = new BufferedPanel { Tag = assetName, Size = new Size(88, 98), Location = new Point(x, y), BackColor = Color.Transparent, Cursor = Cursors.Hand };
+            icon.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Image image;
+                if (DesktopIcons.TryGetValue(assetName, out image))
+                {
+                    e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                    int side = Math.Min(64, (int)(icon.Width * 0.73));
+                    e.Graphics.DrawImage(image, new Rectangle((icon.Width - side) / 2, 0, side, side), new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
+                }
+                using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) : new Font(PixelText.FontFamily, 16, FontStyle.Regular, GraphicsUnit.Pixel))
+                    TextRenderer.DrawText(e.Graphics, label, font, new Rectangle(0, Math.Min(64, (int)(icon.Width * 0.73)) + 4, icon.Width, 26), Color.FromArgb(63, 47, 144), TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine);
+            };
+            icon.Click += delegate { action(); };
+            Desktop.Controls.Add(icon);
+            ShortcutControls.Add(icon);
+        }
+
+        private void PaintLeftRail(object sender, PaintEventArgs e)
+        {
+            if (SideBackground != null)
+            {
+                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, Rail.Width, Rail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
+            }
+        }
+
+        private void PaintRightRail(object sender, PaintEventArgs e)
+        {
+            if (SideBackground == null) return;
+            e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            e.Graphics.TranslateTransform(RightRail.Width, 0);
+            e.Graphics.ScaleTransform(-1, 1);
+            e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, RightRail.Width, RightRail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
+            e.Graphics.ResetTransform();
+        }
+
         private Panel Card(string title, int width)
         {
-            var card = new BufferedPanel { Name = title, Width = width, BackColor = Color.FromArgb(255, 248, 255), Padding = new Padding(12, 42, 12, 20), Margin = new Padding(8) };
+            var card = new BufferedPanel { Name = title, Width = width, BackColor = Color.FromArgb(255, 248, 255), Padding = new Padding(10, 42, 10, 12), Margin = new Padding(8) };
             card.Paint += delegate(object sender, PaintEventArgs e)
             {
-                if (WindowFrame != null) DrawNineSlice(e.Graphics, WindowFrame, card.ClientRectangle);
+                Image frame = card == ActiveCard || WindowInactiveFrame == null ? WindowFrame : WindowInactiveFrame;
+                if (frame != null) DrawNineSlice(e.Graphics, frame, card.ClientRectangle);
                 else using (var pen = new Pen(Color.FromArgb(119, 96, 177), 2)) e.Graphics.DrawRectangle(pen, 1, 1, card.ClientSize.Width - 3, card.ClientSize.Height - 3);
-                using (var font = new Font("Consolas", 10F, FontStyle.Bold)) using (var brush = new SolidBrush(Color.FromArgb(70, 51, 150))) e.Graphics.DrawString("■ " + title, font, brush, 18, 11);
+                using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) : new Font(PixelText.FontFamily, 17, FontStyle.Regular, GraphicsUnit.Pixel)) using (var brush = new SolidBrush(Color.FromArgb(70, 51, 150))) e.Graphics.DrawString("■ " + title, font, brush, 18, 11);
+                Image[] buttonImages = { CardMinimizeImage, CardMaximizeImage, CardCloseImage };
+                using (var pen = new Pen(Color.FromArgb(67, 46, 155), 2))
+                using (var font = new Font("Consolas", 9F, FontStyle.Bold))
+                using (var brush = new SolidBrush(Color.FromArgb(67, 46, 155)))
+                {
+                    string[] labels = { "_", "□", "×" };
+                    for (int button = 0; button < 3; button++)
+                    {
+                        var bounds = CardButtonBounds(card, button);
+                        if (buttonImages[button] != null)
+                        {
+                            e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                            e.Graphics.DrawImage(buttonImages[button], bounds, new Rectangle(Point.Empty, buttonImages[button].Size), GraphicsUnit.Pixel);
+                        }
+                        else { e.Graphics.DrawRectangle(pen, bounds); e.Graphics.DrawString(labels[button], font, brush, bounds.X + 3, bounds.Y - 1); }
+                    }
+                }
             };
             bool moving = false; Point origin = Point.Empty;
-            card.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && e.Y < 40) { moving = true; origin = e.Location; card.Capture = true; card.BringToFront(); } };
+            card.MouseDown += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left || e.Y >= 40) return;
+                for (int command = 0; command < 3; command++)
+                {
+                    if (!CardButtonBounds(card, command).Contains(e.Location)) continue;
+                    if (command == 0 || command == 2) card.Visible = false;
+                    else if (command == 1)
+                    {
+                        if (card.Tag is Rectangle) { card.Bounds = (Rectangle)card.Tag; card.Tag = null; }
+                        else { card.Tag = card.Bounds; card.Bounds = new Rectangle(0, 0, Desktop.Width, Desktop.Height); }
+                    }
+                    return;
+                }
+                moving = true; origin = e.Location; card.Capture = true; FocusCard(card);
+            };
             card.MouseMove += delegate(object sender, MouseEventArgs e)
             {
                 if (!moving) return;
@@ -206,11 +399,19 @@ namespace NixLanConsole
             return card;
         }
 
+        // WindowBase.prefab: header x=8, width=window-20; button centers
+        // are -64, -40.7 and -16 from the header's right anchor.
+        private static Rectangle CardButtonBounds(Control card, int index)
+        {
+            int[] leftFromRight = { 86, 63, 38 };
+            return new Rectangle(card.Width - leftFromRight[index], 11, 20, 20);
+        }
+
         private static void DrawNineSlice(Graphics graphics, Image image, Rectangle target)
         {
             if (target.Width < 24 || target.Height < 70) return;
             graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            int left = 8, right = 8, top = 42, bottom = 20;
+            int left = 69, right = 12, top = 42, bottom = 22;
             int[] sx = { 0, left, image.Width - right }, sy = { 0, top, image.Height - bottom };
             int[] sw = { left, image.Width - left - right, right }, sh = { top, image.Height - top - bottom, bottom };
             int[] dx = { target.Left, target.Left + left, target.Right - right }, dy = { target.Top, target.Top + top, target.Bottom - bottom };
@@ -222,10 +423,13 @@ namespace NixLanConsole
         private void LayoutDesktop()
         {
             if (Desktop == null || Desktop.Width < 100 || Desktop.Height < 100) return;
-            double scale = Math.Min(Desktop.Width / 1678.0, Desktop.Height / 1042.0);
-            CharacterCard.Bounds = ScaleRect(174, 22, 716, 508, scale);
-            StatsCard.Bounds = ScaleRect(1038, 0, 392, 353, scale);
-            RecordsCard.Bounds = ScaleRect(815, 410, 615, 575, scale);
+            double scale = Math.Min(Desktop.Width / 1436.0, Desktop.Height / 1038.0);
+            for (int i = 0; i < ShortcutControls.Count; i++) ShortcutControls[i].Bounds = ScaleRect(50, 55 + i * 120, 88, 98, scale);
+            CharacterCard.Bounds = ScaleRect(174, 62, 716, 508, scale);
+            StatsCard.Bounds = ScaleRect(1038, 22, 392, 353, scale);
+            RecordsCard.Bounds = ScaleRect(815, 447, 615, 575, scale);
+            LiveCard.Bounds = ScaleRect(50, 50, 1336, 940, scale);
+            TransitionOverlay.Bounds = Desktop.ClientRectangle;
             foreach (var card in new[] { CharacterCard, StatsCard, RecordsCard })
             {
                 double[] position;
@@ -261,7 +465,15 @@ namespace NixLanConsole
         private void PaintDesktop(object sender, PaintEventArgs e)
         {
             e.Graphics.Clear(Color.FromArgb(250, 235, 250));
-            using (var brush = new SolidBrush(Color.FromArgb(220, 230, 245)))
+            if (DesktopBackground != null)
+            {
+                using (var brush = new TextureBrush(DesktopBackground, System.Drawing.Drawing2D.WrapMode.Tile))
+                {
+                    brush.TranslateTransform(26, 24);
+                    e.Graphics.FillRectangle(brush, Desktop.ClientRectangle);
+                }
+            }
+            else using (var brush = new SolidBrush(Color.FromArgb(220, 230, 245)))
                 for (int y = 12; y < Desktop.Height; y += 32)
                     for (int x = 12 + (y / 32 % 2) * 16; x < Desktop.Width; x += 32)
                         e.Graphics.FillRectangle(brush, x, y, 7, 7);
@@ -275,11 +487,11 @@ namespace NixLanConsole
         {
             DashboardState state = DisplayServer.Snapshot();
             HostState.Text = state.online ? "● 主机在线  /  " + state.host : "○ 主机离线";
-            TaskbarStatus.Text = state.online ? "● 主机在线" : "○ 主机离线";
+            TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (state.role == "kangel" ? "超天酱" : "糖糖");
             MetricValues[0].Text = state.online && state.cpu >= 0 ? Math.Round(state.cpu) + "%" : "—";
             MetricValues[1].Text = state.online && state.memoryTotal > 0 ? Math.Round(state.memoryUsed / state.memoryTotal * 100) + "%" : "—";
             MetricValues[2].Text = state.online && state.gpu >= 0 ? Math.Round(state.gpu) + "%" : "—";
-            MetricValues[3].Text = state.online ? "CPU " + Temp(state.cpuTemp) + " / GPU " + Temp(state.gpuTemp) : "—";
+            MetricValues[3].Text = state.online ? Temp(state.cpuTemp) + " / " + Temp(state.gpuTemp) : "—";
             double[] values = { state.cpu, state.online && state.memoryTotal > 0 ? state.memoryUsed / state.memoryTotal * 100 : -1, state.gpu, -1 };
             for (int i = 0; i < 3; i++) MetricFills[i].Width = (int)(MetricFills[i].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, values[i])) / 100.0);
             MetricFills[3].Width = (int)(MetricFills[3].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, Math.Max(state.cpuTemp, state.gpuTemp))) / 100.0);
@@ -287,8 +499,41 @@ namespace NixLanConsole
             CharacterState.Text = state.role == "kangel" || state.role == "transform" ? "超天酱 · " + (state.games != null && state.games.Length > 0 ? "游戏运行中 ♡" : "待机 ♡") : "糖糖 · 日常待机 ♡";
             bool kangel = state.role == "kangel" || state.role == "transform";
             bool playing = state.games != null && state.games.Length > 0;
-            if (kangel != IsKangel || playing != IsGameRunning || CurrentClip == null) SelectRoleClip(kangel, playing);
+            bool wasKangel = IsKangel;
+            RoleScene nextScene = playing && kangel ? RoleScene.LiveGaming : kangel ? RoleScene.AfterGame : state.online ? RoleScene.Daily : RoleScene.HostOffline;
+            if (nextScene != CurrentScene || CurrentClip == null) SelectRoleClip(nextScene);
+            LiveGameName = playing ? state.games[0] : "";
+            if (playing && !PreviousGameRunning)
+            {
+                if (!wasKangel && kangel) StartTransformation();
+                else { LiveCard.Visible = true; LiveTab.Visible = true; FocusCard(LiveCard); }
+            }
+            else if (!playing && PreviousGameRunning)
+            {
+                Transforming = false; TransitionOverlay.Visible = false; LiveCard.Visible = false; LiveTab.Visible = false;
+            }
+            if (!playing && !kangel) { Transforming = false; TransitionOverlay.Visible = false; LiveCard.Visible = false; LiveTab.Visible = false; }
+            PreviousGameRunning = playing;
+            if (LiveCard.Visible) LiveCanvas.Invalidate();
             GameList.Text = RecentSummary(state.sessions);
+            LayoutRecordMessages(GameList.Parent);
+        }
+
+        private void LayoutRecordMessages(Control surface)
+        {
+            if (surface == null || surface.Width < 120) return;
+            bool compact = surface.Width < 450;
+            int margin = Math.Max(18, (int)(surface.Width * 0.075));
+            int avatarSize = compact ? 36 : 50;
+            int bubbleX = margin + avatarSize + 9;
+            int bubbleWidth = Math.Min(surface.Width - bubbleX - margin, compact ? 310 : 390);
+            int lines = GameList.Text.Split(new[] { '\n' }).Length;
+            int bubbleHeight = Math.Min(Math.Max(54, lines * (compact ? 16 : 22) + 23), Math.Max(54, surface.Height - 160));
+            int bubbleY = Math.Max(62, (int)(surface.Height * 0.19));
+            GameList.Bounds = new Rectangle(bubbleX, bubbleY, bubbleWidth, bubbleHeight);
+            RecordAvatar.Bounds = new Rectangle(margin, bubbleY + 2, avatarSize, avatarSize);
+            RecordTail.Bounds = new Rectangle(bubbleX - 8, bubbleY + 11, 8, 24);
+            RecordsOpenHint.Bounds = new Rectangle(Math.Max(margin, surface.Width - margin - Math.Min(220, surface.Width / 2)), Math.Min(surface.Height - 52, GameList.Bottom + 18), Math.Min(220, surface.Width / 2), compact ? 30 : 38);
         }
 
         private void LoadRoleAssets()
@@ -297,9 +542,40 @@ namespace NixLanConsole
             {
                 string assets = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "game-assets");
                 string manifest = Path.Combine(assets, "native-role", "角色动画.json");
+                if (File.Exists(Path.Combine(assets, "zpix.ttf")))
+                {
+                    PixelFonts = new PrivateFontCollection();
+                    PixelFonts.AddFontFile(Path.Combine(assets, "zpix.ttf"));
+                    PixelText = new Font(PixelFonts.Families[0], 16, FontStyle.Regular, GraphicsUnit.Pixel);
+                    PixelSmallText = new Font(PixelFonts.Families[0], 11, FontStyle.Regular, GraphicsUnit.Pixel);
+                    PixelTinyText = new Font(PixelFonts.Families[0], 10, FontStyle.Regular, GraphicsUnit.Pixel);
+                    HostState.Font = PixelText; GameList.Font = PixelText; TaskbarStatus.Font = PixelText;
+                    foreach (var value in MetricValues) value.Font = value.Parent.Height < 40 ? PixelSmallText : PixelText;
+                    foreach (var name in MetricNames) name.Font = name.Parent.Height < 40 ? PixelTinyText : PixelSmallText;
+                    foreach (Control control in Taskbar.Controls) if (control is Button) control.Font = PixelText;
+                }
                 if (File.Exists(Path.Combine(assets, "bg_stream_native.png"))) CharacterBackground = LoadDetachedImage(Path.Combine(assets, "bg_stream_native.png"));
-                if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) { SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png")); Rail.BackgroundImage = SideBackground; }
+                if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png"));
+                if (File.Exists(Path.Combine(assets, "desktop_wallpaper.png"))) DesktopBackground = LoadDetachedImage(Path.Combine(assets, "desktop_wallpaper.png"));
+                foreach (string name in new[] { "icon_desktop_youtube.png", "icon_desktop_asobu.png", "icon_desktop_neru.png", "icon_desktop_okusuri.png", "icon_desktop_internet.png", "icon_desktop_odekake.png" })
+                    if (File.Exists(Path.Combine(assets, name))) DesktopIcons[name] = LoadDetachedImage(Path.Combine(assets, name));
+                string[] metricIconNames = { "icon_status_follower.png", "icon_status_stress.png", "icon_status_love.png", "icon_status_yami.png" };
+                for (int i = 0; i < metricIconNames.Length; i++)
+                {
+                    string path = Path.Combine(assets, metricIconNames[i]);
+                    if (File.Exists(path)) { Image icon = LoadDetachedImage(path); MetricIconImages.Add(icon); MetricIcons[i].Image = icon; }
+                }
+                Desktop.Invalidate(); Rail.Invalidate(); RightRail.Invalidate();
                 if (File.Exists(Path.Combine(assets, "window_active.png"))) { WindowFrame = LoadDetachedImage(Path.Combine(assets, "window_active.png")); CharacterCard.Invalidate(); StatsCard.Invalidate(); RecordsCard.Invalidate(); }
+                if (File.Exists(Path.Combine(assets, "window_inactive.png"))) WindowInactiveFrame = LoadDetachedImage(Path.Combine(assets, "window_inactive.png"));
+                if (File.Exists(Path.Combine(assets, "button_minimize.png"))) CardMinimizeImage = LoadDetachedImage(Path.Combine(assets, "button_minimize.png"));
+                if (File.Exists(Path.Combine(assets, "button_maximize.png"))) CardMaximizeImage = LoadDetachedImage(Path.Combine(assets, "button_maximize.png"));
+                if (File.Exists(Path.Combine(assets, "button_close.png"))) CardCloseImage = LoadDetachedImage(Path.Combine(assets, "button_close.png"));
+                CharacterCard.Invalidate(); StatsCard.Invalidate(); RecordsCard.Invalidate();
+                if (File.Exists(Path.Combine(assets, "jine_bg.png"))) { JineBackground = LoadDetachedImage(Path.Combine(assets, "jine_bg.png")); RecordsCard.Controls[0].BackgroundImage = JineBackground; }
+                if (File.Exists(Path.Combine(assets, "haisin.png"))) LiveTemplate = LoadDetachedImage(Path.Combine(assets, "haisin.png"));
+                if (File.Exists(Path.Combine(assets, "icon_jine_ame.png"))) RecordAvatar.Image = LoadDetachedImage(Path.Combine(assets, "icon_jine_ame.png"));
+                if (File.Exists(Path.Combine(assets, "tail.png"))) RecordTail.Image = LoadDetachedImage(Path.Combine(assets, "tail.png"));
                 if (File.Exists(Path.Combine(assets, "button_start.png"))) { StartBackground = LoadDetachedImage(Path.Combine(assets, "button_start.png")); StartButton.BackgroundImage = StartBackground; }
                 if (File.Exists(Path.Combine(assets, "start_pressed.png"))) StartPressedBackground = LoadDetachedImage(Path.Combine(assets, "start_pressed.png"));
                 if (!File.Exists(manifest)) return;
@@ -325,6 +601,10 @@ namespace NixLanConsole
                     }
                     if (clip.Frames.Count > 0) (kangel ? KangelClips : AmeClips).Add(clip);
                 }
+                SceneClips[RoleScene.Daily] = AmeClips.Where(x => x.Name.Contains("_idle_normal_") || x.Name.Contains("_idle_happy_")).ToList();
+                SceneClips[RoleScene.HostOffline] = AmeClips.Where(x => x.Name.Contains("_idle_anxiety_") || x.Name.Contains("_idle_iraira_")).ToList();
+                SceneClips[RoleScene.AfterGame] = KangelClips.Where(x => x.Name == "stream_cho_akaruku" || x.Name == "stream_cho_kawaiku" || x.Name == "stream_cho_gaoo").ToList();
+                SceneClips[RoleScene.LiveGaming] = KangelClips.Where(x => x.Name == "stream_cho_game" || x.Name == "stream_cho_game_fever" || x.Name == "stream_cho_akaruku").ToList();
             }
             catch (Exception ex) { RoleAssetError = ex.ToString(); }
             CharacterCanvas.Invalidate();
@@ -335,12 +615,108 @@ namespace NixLanConsole
             using (var stream = new MemoryStream(File.ReadAllBytes(path))) using (var source = Image.FromStream(stream)) return new Bitmap(source);
         }
 
-        private void SelectRoleClip(bool kangel, bool gameRunning)
+        private void StartTransformation()
         {
-            IsKangel = kangel;
-            IsGameRunning = gameRunning;
-            var list = kangel && !gameRunning ? KangelClips.Where(x => x.Name != "stream_cho_game").ToList() : kangel ? KangelClips : AmeClips;
-            CurrentClip = list.Count == 0 ? null : list[Randomizer.Next(list.Count)];
+            Transforming = true;
+            TransformationStarted = DateTime.UtcNow;
+            LiveCard.Visible = false;
+            TransitionOverlay.Visible = true;
+            TransitionOverlay.BringToFront();
+            TransitionOverlay.Invalidate();
+        }
+
+        private void FinishTransformation()
+        {
+            Transforming = false;
+            TransitionOverlay.Visible = false;
+            if (!PreviousGameRunning) return;
+            LiveCard.Visible = true;
+            LiveTab.Visible = true;
+            FocusCard(LiveCard);
+            LiveCanvas.Invalidate();
+        }
+
+        private void PaintTransformation(object sender, PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Color.FromArgb(245, 223, 247));
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            double elapsed = Math.Max(0, (DateTime.UtcNow - TransformationStarted).TotalSeconds);
+            int width = Math.Min(Desktop.Width - 40, (int)(696 * Math.Min(2.0, Desktop.Width / 760.0)));
+            int height = (int)(width * 454.0 / 696.0);
+            var viewport = new Rectangle((Desktop.Width - width) / 2, Math.Max(20, (Desktop.Height - height) / 2 - 25), width, height);
+            if (CharacterBackground != null) g.DrawImage(CharacterBackground, viewport);
+            RoleClip clip = elapsed < 1.25
+                ? AmeClips.FirstOrDefault(x => x.Name == "stream_ame_idle_normal_a")
+                : KangelClips.FirstOrDefault(x => x.Name == "stream_cho_kawaiku");
+            if (clip == null) clip = elapsed < 1.25 ? AmeClips.FirstOrDefault() : KangelClips.FirstOrDefault();
+            Image frame = FrameAt(clip, elapsed < 1.25 ? elapsed : elapsed - 1.25);
+            if (frame != null) g.DrawImage(frame, viewport);
+            if (elapsed >= 1.16 && elapsed < 1.43)
+                using (var flash = new SolidBrush(Color.FromArgb((int)(235 * (1 - Math.Abs(elapsed - 1.295) / 0.135)), Color.White))) g.FillRectangle(flash, Desktop.ClientRectangle);
+            using (var pen = new Pen(Color.FromArgb(78, 56, 166), 3)) g.DrawRectangle(pen, viewport);
+        }
+
+        private void PaintLive(object sender, PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            var area = LiveCanvas.ClientRectangle;
+            if (area.Width < 100 || area.Height < 100) return;
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            if (LiveTemplate != null) g.DrawImage(LiveTemplate, area);
+            else g.Clear(Color.FromArgb(255, 248, 255));
+            double sx = area.Width / 1382.0, sy = area.Height / 890.0;
+            Func<int, int, int, int, Rectangle> rect = (x, y, w, h) => new Rectangle((int)(x * sx), (int)(y * sy), Math.Max(1, (int)(w * sx)), Math.Max(1, (int)(h * sy)));
+            var video = rect(60, 90, 696, 454);
+            if (CharacterBackground != null) g.DrawImage(CharacterBackground, video);
+            Image frame = CurrentFrame();
+            if (frame != null) g.DrawImage(frame, video);
+            using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 12F) : new Font(PixelText.FontFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var ink = new SolidBrush(Color.FromArgb(69, 53, 153)))
+            {
+                g.DrawString("超天酱来啦！", font, ink, (int)(65 * sx), (int)(588 * sy));
+                g.DrawString("主机正在运行：" + LiveGameName, font, ink, (int)(65 * sx), (int)(633 * sy));
+                g.DrawString("正在选择留言", font, ink, (int)(900 * sx), (int)(104 * sy));
+                string[] lines = { "正在记录游戏时长", "主机游戏：" + LiveGameName, "主机状态已连接", "超天酱陪你玩游戏！", "切回桌面可查看统计", "今天也一起加油！" };
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    using (var marker = new SolidBrush(Color.FromArgb(70, 106, 222)))
+                        g.FillRectangle(marker, rect(790, 154 + i * 46, 13, 13));
+                    g.DrawString(lines[i], font, ink, (int)(812 * sx), (int)((148 + i * 46) * sy));
+                }
+                g.DrawString("待选留言 ▶", font, ink, (int)(60 * sx), (int)(787 * sy));
+            }
+            using (var outline = new Pen(Color.FromArgb(214, 191, 226)))
+            {
+                g.DrawRectangle(outline, rect(448, 755, 356, 86));
+                g.DrawRectangle(outline, rect(824, 755, 356, 86));
+            }
+        }
+
+        private static Image FrameAt(RoleClip clip, double elapsed)
+        {
+            if (clip == null || clip.Frames.Count == 0 || clip.Duration <= 0) return null;
+            double position = elapsed % clip.Duration;
+            RoleFrame selected = clip.Frames[0];
+            foreach (var frame in clip.Frames) { if (frame.Time > position) break; selected = frame; }
+            return selected.Image;
+        }
+
+        private void SelectRoleClip(RoleScene scene)
+        {
+            CurrentScene = scene;
+            IsKangel = scene == RoleScene.AfterGame || scene == RoleScene.LiveGaming;
+            IsGameRunning = scene == RoleScene.LiveGaming;
+            List<RoleClip> list;
+            if (!SceneClips.TryGetValue(scene, out list) || list.Count == 0) list = IsKangel ? KangelClips : AmeClips;
+            if (list.Count == 0) CurrentClip = null;
+            else if (list.Count == 1) CurrentClip = list[0];
+            else
+            {
+                var candidates = list.Where(x => x != CurrentClip).ToList();
+                CurrentClip = candidates[Randomizer.Next(candidates.Count)];
+            }
             ClipStarted = DateTime.UtcNow;
             DisplayedFrame = CurrentFrame();
             CharacterCanvas.Invalidate();
@@ -351,13 +727,11 @@ namespace NixLanConsole
             var bounds = CharacterCanvas.ClientRectangle;
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            if (CharacterBackground != null) e.Graphics.DrawImage(CharacterBackground, bounds);
+            if (CharacterBackground != null) e.Graphics.DrawImage(CharacterBackground, bounds, new Rectangle(Point.Empty, CharacterBackground.Size), GraphicsUnit.Pixel);
             Image image = CurrentFrame();
             if (image != null && bounds.Width > 0 && bounds.Height > 0)
             {
-                double scale = Math.Min((bounds.Width * .88) / image.Width, (bounds.Height * .96) / image.Height);
-                int width = Math.Max(1, (int)(image.Width * scale)), height = Math.Max(1, (int)(image.Height * scale));
-                e.Graphics.DrawImage(image, (bounds.Width - width) / 2, bounds.Height - height, width, height);
+                e.Graphics.DrawImage(image, bounds, new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
             }
             else
             {
@@ -368,14 +742,11 @@ namespace NixLanConsole
 
         private Image CurrentFrame()
         {
-            if (CurrentClip == null || CurrentClip.Frames.Count == 0) return null;
-            double elapsed = (DateTime.UtcNow - ClipStarted).TotalSeconds % CurrentClip.Duration;
-            RoleFrame selected = CurrentClip.Frames[0];
-            foreach (var frame in CurrentClip.Frames) { if (frame.Time > elapsed) break; selected = frame; }
-            return selected.Image;
+            return FrameAt(CurrentClip, (DateTime.UtcNow - ClipStarted).TotalSeconds);
         }
 
         private sealed class RoleClip { public string Name; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
+        private enum RoleScene { Daily, HostOffline, AfterGame, LiveGaming }
         private sealed class RoleFrame { public double Time; public Image Image; }
 
         private sealed class BufferedPanel : Panel
@@ -401,7 +772,7 @@ namespace NixLanConsole
                 totals[session.game] += end - start;
             }
             if (totals.Count == 0) return "最近 7 天没有游戏记录。";
-            return String.Join("\r\n\r\n", totals.OrderByDescending(x => x.Value).Take(12).Select(x => "▣  " + x.Key + "\r\n     " + FormatDuration(x.Value)));
+            return String.Join("\r\n", totals.OrderByDescending(x => x.Value).Take(3).Select(x => "▣  " + x.Key + "  " + FormatDuration(x.Value)));
         }
 
         private void PaintChart(object sender, PaintEventArgs e)

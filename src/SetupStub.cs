@@ -158,7 +158,7 @@ namespace NixLanConsoleSetup
                         }
                     }
                 }
-                if (!File.Exists(Path.Combine(stage, "ControlConsole.exe"))) throw new InvalidDataException("安装包未通过完整性检查：缺少 ControlConsole.exe。");
+                if (!File.Exists(Path.Combine(stage, "ControlConsole.exe")) || !File.Exists(Path.Combine(stage, "Updater.exe"))) throw new InvalidDataException("安装包未通过完整性检查：缺少程序文件。");
                 if (!File.Exists(Path.Combine(stage, "game-assets", "native-role", "角色动画.json"))) throw new InvalidDataException("安装包未通过完整性检查：缺少角色动画素材。");
                 worker.ReportProgress(88, "正在切换到新版本…");
                 if (Directory.Exists(target)) { Directory.Move(target, backup); movedOld = true; }
@@ -375,7 +375,7 @@ namespace NixLanConsoleSetup
                         if (resource == null) { Environment.ExitCode = 2; return; }
                         using (var archive = new ZipArchive(resource, ZipArchiveMode.Read))
                         {
-                            if (archive.GetEntry("ControlConsole.exe") == null || archive.GetEntry("ApplyUpdate.ps1") == null || archive.GetEntry("game-assets/native-role/角色动画.json") == null) { Environment.ExitCode = 3; return; }
+                            if (archive.GetEntry("ControlConsole.exe") == null || archive.GetEntry("Updater.exe") == null || archive.GetEntry("ApplyUpdate.ps1") == null || !archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "game-assets/native-role/角色动画.json", StringComparison.Ordinal))) { Environment.ExitCode = 3; return; }
                             var versionEntry = archive.GetEntry("version.txt");
                             if (versionEntry == null) { Environment.ExitCode = 4; return; }
                             using (var stream = versionEntry.Open()) using (var reader = new StreamReader(stream))

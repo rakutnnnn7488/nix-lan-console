@@ -1,40 +1,36 @@
-# 局域网桌面控制台
+# Nix LAN Console
 
-Windows 主机发送硬件状态与游戏进程，副机显示控制台和游戏时长。副机每 5 分钟检查 GitHub 最新 Release，并在无游戏运行时安装更新。
+面向个人双机环境的 Windows 原生桌面控制台。主机采集硬件状态与游戏进程；副机通过 TCP 主动连接主机，并用 WinForms 窗口展示状态、角色动画和游戏记录。界面不依赖浏览器。
+
+## 当前源码
+
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，目前为 **1.6.2.0 本地候选版**。本地源码版本不代表 GitHub 主分支或 Release 已发布该版本。
 
 ## 构建
 
-在 Windows PowerShell 中运行 `powershell -ExecutionPolicy Bypass -File .\build.ps1`。需要 .NET Framework 4.8 和系统自带 C# 编译器。
+环境：Windows PowerShell、.NET Framework 4.8 与系统 C# 编译器。
 
-## 更新发布
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
 
-Release 标签使用四段版本号；附加同版本的 `ControlConsole-update-版本.zip`。GitHub 更新包只含程序、更新脚本和版本号，不公开游戏素材。完整本地包由 `package-local.ps1 -GameAssetsDir <本地游戏素材目录>` 生成，内含 `update-source.txt`、仅供个人使用的本地游戏素材，以及独立的 `NixLanConsole-Setup-版本.exe` 安装程序。安装器将程序包嵌入单个 EXE，支持覆盖安装、备份旧目录、失败回滚和保留用户配置；请仅通过私有方式传给副机，不要公开上传包含游戏素材的安装器。控制台画面由 WinForms 原生窗口绘制，不需要浏览器或 HTML 服务。
+如需在个人电脑上制作含角色与界面素材的完整包，使用本地游戏素材目录：
 
-首次安装需要完整的本地安装包。这个仓库不提供游戏提取素材，也不提供完整安装包；请在你自己的合法游戏副本中提取素材并放进 `game-assets`。不要公开分发游戏素材。GitHub 发布包只包含程序更新。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\你的本地素材目录'
+```
 
-当前源码没有附带开源许可证；仓库公开不代表允许第三方使用或分发。
+公开仓库和公开代码更新 ZIP **不包含**从游戏中提取的角色、字体及界面素材。不要上传个人完整包或素材目录。仓库目前没有附带开源许可证。
 
-每次更新先修改 version.txt 和 BuildInfo.Version，再推送 main；GitHub Actions 会构建并发布代码更新包。
+## 运行与连接
 
-1.4.4.0：游戏按完整可执行文件路径匹配，发现 Steam 库与官方终末地程序；历史中断会话会结清，记录界面可纠错。主机和副机均会自动检查更新（需先各安装一次此版本）。
+- 两台电脑运行同一程序，分别选择“主机”和“副机”；主、副机均有托盘图标。
+- 主机监听 **TCP 46702**。首次配置可在主机管理员 PowerShell 运行 `OpenHostTcpPort.ps1`。副机从“开始 → 设置 → 软件版本”填写主机当前 IPv4 地址。
+- 副机显示主机 CPU、内存、GPU、可读取的温度、最近一分钟曲线，以及按游戏进程记录的时长。主机地址变化后应更新副机设置。
+- 程序数据保存在 `%LOCALAPPDATA%\NixLanConsole`。升级前请先从托盘退出旧进程。
 
-1.4.5.0：同一角色单实例运行；通过主机进程标识判断真正的新启动；副机复用已有 Edge 窗口并清理重复窗口。
-v1.4.6.0: Exclude Wallpaper Engine; Start opens settings for game records and updates.
+## 更新与发布
 
-1.4.6.1：Webcam 预览改用本地游戏副本提取的原生房间与侧栏素材。素材未纳入公开源码或公开发布包。`build.ps1 -GameAssetsDir <本地素材目录>` 可用于本地完整构建。
+`build.ps1` 构建程序；`package-local.ps1` 制作个人完整包；`.github/workflows/release.yml` 负责公开代码更新包。代码更新包只适合已有完整素材的安装目录，不能代替首次完整安装。更新器设计包含进度显示、备份、启动检查和失败回滚；真实副机升级须单独验证。
 
-1.4.6.2：按游戏窗口边框切片调整四个窗口的边框和内容区；加入最小化、最大化、关闭、拖动、缩放与任务栏还原。公开 Release 仅含程序更新；本地游戏素材由完整安装包保留。
-
-
-1.4.6.3：设置页的软件版本选项卡显示更新状态和下载进度。自动更新会报告检查、下载百分比、校验、安装、等待游戏结束与错误状态；修复 GitHub 更新包下载后误将文件复制到自身而导致更新中断的问题。
-
-1.4.6.4：将任务栏按钮改为游戏原生弹起/按下两态素材，按钮状态随窗口最小化和恢复切换；修正开始按钮乱码。
-
-1.4.6.5：修复 GitHub 下载未返回 Content-Length 时进度条停在 0% 的问题；改为不定进度动画并显示已下载的 MB。
-
-1.5.0.1：角色画布启用双缓冲，仅在实际换帧时重绘，修复持续闪烁；原生主界面增加游戏风格底部任务栏和“开始”设置入口。
-
-1.5.0.2：修复副机端口短暂被占用时后台直接退出；更新器要求新版写入启动就绪标记，失败则回滚并暂停自动重试同一版本，同时记录启动错误供排查。
-
-
-1.5.0.3：主机状态窗口增加 CPU、内存、GPU 与温度条及最近 60 秒曲线；三个桌面窗口可拖动，位置按屏幕比例保存，并在分辨率变化后保持可见。
+发布前应同步 `version.txt` 与 `BuildInfo.Version`，检查构建结果和素材排除规则，再处理 GitHub 分支与 Release。历史设计过程见 `NATIVE-UI-MIGRATION.md`；本地项目的当前任务和验收标准见工作区根目录的 `项目总览与任务计划.md`。
