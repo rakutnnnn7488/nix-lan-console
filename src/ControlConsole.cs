@@ -472,7 +472,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.3.2"; }
+    internal static class BuildInfo { public const string Version = "1.6.3.3"; }
 
     internal static class DisplayServer
     {
@@ -575,7 +575,10 @@ namespace NixLanConsole
                 SetUpdateProgress("installing", 99, available.ToString(), "正在打开可见的更新窗口…");
                 Process started = Process.Start(new ProcessStartInfo(localUpdater, args) { UseShellExecute = true, WorkingDirectory = updateDir });
                 if (started == null) throw new InvalidOperationException("Windows 未能启动更新窗口。");
-                started.Dispose();
+                using (started)
+                {
+                    if (started.WaitForExit(1200)) throw new InvalidOperationException("更新程序启动后立即退出，请查看 update.log。");
+                }
                 Environment.Exit(0);
             }
             catch (Exception ex)
@@ -773,7 +776,26 @@ namespace NixLanConsole
             }
             catch { return false; }
         }
-        private static string Quote(string s) { return "\"" + (s ?? "").Replace("\"", "\\\"") + "\""; }
+        private static string Quote(string s)
+        {
+            if (s == null) s = "";
+            var result = new StringBuilder("\"");
+            int slashCount = 0;
+            foreach (char ch in s)
+            {
+                if (ch == '\\') { slashCount++; continue; }
+                if (ch == '"')
+                {
+                    result.Append('\\', slashCount * 2 + 1).Append('"');
+                    slashCount = 0;
+                    continue;
+                }
+                result.Append('\\', slashCount).Append(ch);
+                slashCount = 0;
+            }
+            result.Append('\\', slashCount * 2).Append('"');
+            return result.ToString();
+        }
         private static void ReadTcp()
         {
             DateTime lastErrorLog = DateTime.MinValue;
@@ -1093,4 +1115,5 @@ namespace NixLanConsole
         protected override void ExitThreadCore() { Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
     }
 }
+
 

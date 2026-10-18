@@ -325,7 +325,12 @@ namespace NixLanConsoleUpdater
                 Environment.ExitCode = UpdateWindow.Test(args[1], args[2], args[0] == "--test-rollback");
                 return;
             }
-            if (args.Length != 5 || args[0] != "--apply") { MessageBox.Show("更新程序参数无效。", "Nix LAN Console 更新", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            if (args.Length != 5 || args[0] != "--apply")
+            {
+                try { Directory.CreateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole")); File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole", "update.log"), DateTime.Now.ToString("s") + " updater arguments invalid: count=" + args.Length + Environment.NewLine, Encoding.UTF8); } catch { }
+                MessageBox.Show("更新程序参数无效。请通过完整安装包修复，详情见 update.log。", "Nix LAN Console 更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
             int parentPid;
             if (!Int32.TryParse(args[3], out parentPid)) { MessageBox.Show("旧版进程编号无效。", "Nix LAN Console 更新", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             Application.EnableVisualStyles();
@@ -334,3 +339,4 @@ namespace NixLanConsoleUpdater
         }
     }
 }
+
