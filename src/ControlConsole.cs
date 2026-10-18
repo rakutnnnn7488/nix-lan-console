@@ -33,14 +33,14 @@ namespace NixLanConsole
                 {
                     bool created;
                     using (var mutex = new Mutex(true, "Local\\NixLanConsole.Host", out created))
-                        if (created) HostSensor.Run();
+                        if (created) HostSensor.Run(); else Environment.ExitCode = 3;
                     return;
                 }
                 if (args.Length > 0 && args[0] == "--display")
                 {
                     bool created;
                     using (var mutex = new Mutex(true, "Local\\NixLanConsole.Display", out created))
-                        if (created) DisplayServer.Run();
+                        if (created) DisplayServer.Run(); else Environment.ExitCode = 3;
                     return;
                 }
                 if (args.Length > 0 && args[0] == "--native-preview")
@@ -58,16 +58,37 @@ namespace NixLanConsole
         }
     }
 
+    internal static class NixPaths
+    {
+        internal static string DataDir
+        {
+            get
+            {
+                string custom = Environment.GetEnvironmentVariable("NIXLAN_DATA_DIR");
+                if (!String.IsNullOrWhiteSpace(custom)) return Path.GetFullPath(custom);
+                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+            }
+        }
+    }
+
     internal static class StartupDiagnostics
     {
-        private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+        private static readonly string DataDir = NixPaths.DataDir;
         public static void Write(string message)
         {
             try { Directory.CreateDirectory(DataDir); File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " " + message + Environment.NewLine, Encoding.UTF8); } catch { }
         }
         public static void Ready(string role)
         {
-            try { Directory.CreateDirectory(DataDir); File.WriteAllText(Path.Combine(DataDir, "startup-ready.txt"), Process.GetCurrentProcess().Id + "|" + BuildInfo.Version + "|" + role, Encoding.UTF8); } catch { }
+            try
+            {
+                Directory.CreateDirectory(DataDir);
+                File.WriteAllText(Path.Combine(DataDir, "startup-ready.txt"), Process.GetCurrentProcess().Id + "|" + BuildInfo.Version + "|" + role, Encoding.UTF8);
+                // A running new version proves the last update succeeded; clear the 24h retry gate.
+                string failed = Path.Combine(DataDir, "failed-update.txt");
+                if (File.Exists(failed) && String.Equals(File.ReadAllText(failed, Encoding.UTF8).Trim(), BuildInfo.Version, StringComparison.OrdinalIgnoreCase)) File.Delete(failed);
+            }
+            catch { }
             Write("ready version=" + BuildInfo.Version + " role=" + role + " pid=" + Process.GetCurrentProcess().Id);
         }
     }
@@ -97,7 +118,7 @@ namespace NixLanConsole
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 string label = Path.GetFileNameWithoutExtension(dialog.FileName);
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+                string dir = NixPaths.DataDir;
                 Directory.CreateDirectory(dir); string file = Path.Combine(dir, "tracked-games.txt");
                 string executable = Path.GetFullPath(dialog.FileName);
                 var lines = File.Exists(file) ? File.ReadAllLines(file).Where(x => !x.TrimStart().StartsWith(executable + "|", StringComparison.OrdinalIgnoreCase)).ToList() : new List<string>();
@@ -107,7 +128,9 @@ namespace NixLanConsole
         }
         private void Configure(string role, string taskName)
         {
-            string exe = Application.ExecutablePath;
+            // Autostart must point at the stable launcher, not this versioned app.
+            string exe = BuildInfo.LauncherPath;
+            if (!File.Exists(exe)) exe = Application.ExecutablePath;
             try
             {
                 using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
@@ -164,7 +187,7 @@ namespace NixLanConsole
     internal static class HostSensor
     {
         private const int TcpPort = 46702;
-        private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+        private static readonly string DataDir = NixPaths.DataDir;
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         private static readonly string BootId = Guid.NewGuid().ToString("N");
         private static PerformanceCounter CpuCounter;
@@ -472,7 +495,28 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.3.4"; }
+    internal static class BuildInfo
+    {
+        public const string Version = "1.7.1.0";
+        // The app lives in <install>\versions\<version>\ControlConsole.exe.
+        // Assets, update-source.txt and the launcher are shared at <install>.
+        internal static string InstallDir
+        {
+            get
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                try
+                {
+                    var dir = new DirectoryInfo(baseDir);
+                    if (dir.Parent != null && dir.Parent.Parent != null && String.Equals(dir.Parent.Name, "versions", StringComparison.OrdinalIgnoreCase))
+                        return dir.Parent.Parent.FullName;
+                }
+                catch { }
+                return baseDir;
+            }
+        }
+        internal static string LauncherPath { get { return Path.Combine(InstallDir, "ControlConsole.exe"); } }
+    }
 
     internal static class DisplayServer
     {
@@ -497,8 +541,14 @@ namespace NixLanConsole
         private static string UpdateProgressMessage = "每 30 分钟检查 GitHub 最新版本。";
         private static string UpdateProgressVersion = "";
         private static int UpdateProgressPercent = -1;
-        private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
-        private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
+        private static readonly string BaseDir = BuildInfo.InstallDir;
+        private static readonly string DataDir = NixPaths.DataDir;
+        // Session persistence is deliberately throttled and performed outside Gate:
+        // serializing 1000 sessions with samples costs ~140 ms, which must never block the UI thread.
+        private static readonly object SaveGate = new object();
+        private const int SessionSaveSeconds = 30;
+        private static bool SessionsDirty;
+        private static DateTime NextSessionSaveUtc = DateTime.MinValue;
 
         private static void SetUpdateProgress(string state, int percent, string version, string message)
         {
@@ -529,6 +579,7 @@ namespace NixLanConsole
         internal static void CheckForUpdate(object ignored)
         {
             if (Interlocked.CompareExchange(ref UpdateStarted, 1, 0) != 0) return;
+            Version attempted = null;
             try
             {
                 bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal);
@@ -563,27 +614,34 @@ namespace NixLanConsole
                     SetUpdateProgress("failed", -1, available.ToString(), "版本 " + available + " 上次安装失败，已暂停自动重试。可在设置中手动重试。");
                     return;
                 }
-                SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在验证并准备安装…");
+                SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在校验并准备安装…");
+                attempted = available;
                 string updateDir = Path.Combine(DataDir, "updates"); Directory.CreateDirectory(updateDir);
                 string localZip = Path.Combine(updateDir, "pending-" + available + "-" + Guid.NewGuid().ToString("N") + ".zip");
                 File.Copy(sourceZip, localZip, false);
-                string updater = Path.Combine(BaseDir, "Updater.exe");
-                if (!File.Exists(updater)) throw new FileNotFoundException("更新程序不存在", updater);
-                string localUpdater = Path.Combine(updateDir, "Updater-" + Guid.NewGuid().ToString("N") + ".exe");
-                File.Copy(updater, localUpdater);
-                string args = "--apply " + Quote(BaseDir) + " " + Quote(localZip) + " " + Process.GetCurrentProcess().Id + " " + (hostMode ? "--sensor" : "--display");
-                SetUpdateProgress("installing", 99, available.ToString(), "正在打开可见的更新窗口…");
-                Process started = Process.Start(new ProcessStartInfo(localUpdater, args) { UseShellExecute = true, WorkingDirectory = updateDir });
-                if (started == null) throw new InvalidOperationException("Windows 未能启动更新窗口。");
-                using (started)
+                string previousVersion = null;
+                try
                 {
-                    if (started.WaitForExit(1200)) throw new InvalidOperationException("更新程序启动后立即退出，请查看 update.log。");
+                    previousVersion = InstallVersionPackage(localZip, available.ToString());
+                    SetUpdateProgress("installing", 99, available.ToString(), "更新已就绪，正在切换到新版本…");
+                    try { File.Delete(localZip); } catch { }
+                    RestartThroughLauncher(hostMode ? "--sensor" : "--display");
+                    Environment.Exit(0);
                 }
-                Environment.Exit(0);
+                catch
+                {
+                    RestoreCurrentVersion(previousVersion);
+                    throw;
+                }
+                finally { try { if (File.Exists(localZip)) File.Delete(localZip); } catch { } }
             }
             catch (Exception ex)
             {
                 SetUpdateProgress("failed", -1, "", "更新失败：" + ex.Message);
+                if (attempted != null)
+                {
+                    try { Directory.CreateDirectory(DataDir); File.WriteAllText(Path.Combine(DataDir, "failed-update.txt"), attempted.ToString(), Encoding.UTF8); } catch { }
+                }
                 try { File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " update check: " + ex.Message + Environment.NewLine, Encoding.UTF8); } catch { }
             }
             finally { Interlocked.Exchange(ref UpdateStarted, 0); }
@@ -765,37 +823,118 @@ namespace NixLanConsole
             {
                 using (var archive = ZipFile.OpenRead(file))
                 {
-                    if (archive.GetEntry("ControlConsole.exe") == null || archive.GetEntry("ApplyUpdate.ps1") == null || archive.GetEntry("Updater.exe") == null) return false;
-                    var entry = archive.GetEntry("version.txt"); if (entry == null) return false;
-                    using (var reader = new StreamReader(entry.Open()))
-                    {
-                        Version embedded; if (!Version.TryParse(reader.ReadToEnd().Trim(), out embedded)) return false;
-                        version = embedded; return true;
-                    }
+                    var entry = archive.GetEntry("version.txt");
+                    if (entry == null) return false;
+                    string text;
+                    using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                        text = reader.ReadToEnd().Trim().TrimStart('\uFEFF');
+                    Version embedded;
+                    if (!Version.TryParse(text, out embedded)) return false;
+                    // 1.7 packages carry versions/<version>/ControlConsole.exe; reject legacy layouts.
+                    if (!archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "versions/" + embedded + "/ControlConsole.exe", StringComparison.OrdinalIgnoreCase))) return false;
+                    version = embedded;
+                    return true;
                 }
             }
             catch { return false; }
         }
-        private static string Quote(string s)
+
+        private static string InstallVersionPackage(string archivePath, string version)
         {
-            if (s == null) s = "";
-            var result = new StringBuilder("\"");
-            int slashCount = 0;
-            foreach (char ch in s)
+            string root = BuildInfo.InstallDir;
+            string versionsDir = Path.Combine(root, "versions");
+            Directory.CreateDirectory(versionsDir);
+            string target = Path.Combine(versionsDir, version);
+            try
             {
-                if (ch == '\\') { slashCount++; continue; }
-                if (ch == '"')
+                // Extract into the final directory and mark it complete last. No directory
+                // rename is involved, so antivirus/indexer file handles cannot block the switch.
+                if (Directory.Exists(target)) Directory.Delete(target, true);
+                Directory.CreateDirectory(target);
+                string targetPrefix = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string packagePrefix = "versions/" + version + "/";
+                using (var archive = ZipFile.OpenRead(archivePath))
                 {
-                    result.Append('\\', slashCount * 2 + 1).Append('"');
-                    slashCount = 0;
-                    continue;
+                    foreach (var entry in archive.Entries)
+                    {
+                        string name = entry.FullName.Replace('\\', '/');
+                        if (!name.StartsWith(packagePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                        string relative = name.Substring(packagePrefix.Length);
+                        if (relative.Length == 0) continue;
+                        if (relative.Split('/').Any(x => x == ".." || x == ".")) throw new InvalidDataException("更新包包含无效路径。");
+                        string output = Path.GetFullPath(Path.Combine(target, relative.Replace('/', Path.DirectorySeparatorChar)));
+                        if (!output.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包路径超出目录。");
+                        if (name.EndsWith("/", StringComparison.Ordinal)) Directory.CreateDirectory(output);
+                        else
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(output));
+                            using (var input = entry.Open()) using (var file = File.Create(output)) input.CopyTo(file);
+                        }
+                    }
                 }
-                result.Append('\\', slashCount).Append(ch);
-                slashCount = 0;
+                if (!File.Exists(Path.Combine(target, "ControlConsole.exe"))) throw new InvalidDataException("更新包中缺少新版本程序。");
+                WriteVersionFile(Path.Combine(target, ".complete"), version);
+                string previous = ReadVersionFile(Path.Combine(root, "current.txt"));
+                if (String.IsNullOrEmpty(previous)) previous = BuildInfo.Version;
+                WriteVersionFile(Path.Combine(root, "previous.txt"), previous);
+                WriteVersionFile(Path.Combine(root, "current.txt"), version);
+                WriteVersionFile(Path.Combine(root, "version.txt"), version);
+                Log("update installed version=" + version + " previous=" + previous);
+                return previous;
             }
-            result.Append('\\', slashCount * 2).Append('"');
-            return result.ToString();
+            catch (Exception ex)
+            {
+                try { if (Directory.Exists(target)) Directory.Delete(target, true); } catch { }
+                try { Directory.CreateDirectory(DataDir); File.WriteAllText(Path.Combine(DataDir, "failed-update.txt"), version, Encoding.UTF8); } catch { }
+                throw new IOException("安装更新失败：" + ex.Message, ex);
+            }
         }
+
+        private static void RestartThroughLauncher(string role)
+        {
+            string launcher = BuildInfo.LauncherPath;
+            if (!File.Exists(launcher) || String.Equals(Path.GetFullPath(launcher), Path.GetFullPath(Application.ExecutablePath), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("当前安装不是 1.7 版本目录布局，请使用完整安装包升级。");
+            string args = "--wait-pid " + Process.GetCurrentProcess().Id + " " + role;
+            Process started = Process.Start(new ProcessStartInfo(launcher, args) { UseShellExecute = false, WorkingDirectory = BuildInfo.InstallDir });
+            if (started == null) throw new InvalidOperationException("Windows 未能启动更新启动器。");
+            using (started)
+            {
+                if (started.WaitForExit(1500)) throw new InvalidOperationException("更新启动器启动后立即退出，请查看 update.log。");
+            }
+        }
+
+        private static void RestoreCurrentVersion(string version)
+        {
+            if (String.IsNullOrEmpty(version)) return;
+            try
+            {
+                WriteVersionFile(Path.Combine(BuildInfo.InstallDir, "current.txt"), version);
+                WriteVersionFile(Path.Combine(BuildInfo.InstallDir, "version.txt"), version);
+            }
+            catch (Exception ex) { Log("restore current version: " + ex.Message); }
+        }
+
+        private static string ReadVersionFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                string text = File.ReadAllText(path, Encoding.UTF8).Trim().TrimStart('\uFEFF');
+                Version parsed;
+                return Version.TryParse(text, out parsed) ? text : null;
+            }
+            catch { return null; }
+        }
+
+        private static void WriteVersionFile(string path, string text)
+        {
+            string pending = path + ".pending";
+            File.WriteAllText(pending, text, Encoding.UTF8);
+            if (File.Exists(path)) File.Replace(pending, path, null, true);
+            else File.Move(pending, path);
+        }
+
         private static void ReadTcp()
         {
             DateTime lastErrorLog = DateTime.MinValue;
@@ -829,6 +968,7 @@ namespace NixLanConsole
                     }
                 }
                 catch (Exception ex) { if ((DateTime.UtcNow - lastErrorLog).TotalSeconds >= 30) { StartupDiagnostics.Write("TCP host connection: " + ex.Message); lastErrorLog = DateTime.UtcNow; } }
+                SaveSessionsIfDue();
                 Thread.Sleep(1000);
             }
         }
@@ -848,6 +988,7 @@ namespace NixLanConsole
                     Sessions.Insert(0, ActiveSessions[name]);
                     // Keep detailed curves for recent sessions without growing sessions.json indefinitely.
                     foreach (var old in Sessions.Skip(50)) old.samples = null;
+                    MarkSessionsDirty(true);
                 }
             foreach (var session in ActiveSessions.Values)
             {
@@ -857,10 +998,11 @@ namespace NixLanConsole
                     samples.Add(new GameMetricSample { utc = p.utc, cpu = p.cpu, gpu = p.gpu, cpuTemp = p.cpuTemp, gpuTemp = p.gpuTemp });
                     if (samples.Count > 240) samples = samples.Where((sample, index) => index % 2 == 0).ToList();
                     session.samples = samples.ToArray();
+                    MarkSessionsDirty(false);
                 }
             }
             foreach (string name in ActiveSessions.Keys.ToArray())
-                if (!current.Contains(name)) { ActiveSessions[name].end = p.utc; ActiveSessions.Remove(name); }
+                if (!current.Contains(name)) { ActiveSessions[name].end = p.utc; ActiveSessions.Remove(name); MarkSessionsDirty(true); }
             bool running = current.Count > 0;
             if (running)
             {
@@ -874,7 +1016,6 @@ namespace NixLanConsole
             }
             AnyGame = running;
             if (openForNewHost) RestoreDashboard();
-            SaveSessions();
         }
         private static bool ShouldOpenForHost(MetricPacket previous, MetricPacket current, TimeSpan gap)
         {
@@ -947,8 +1088,8 @@ namespace NixLanConsole
                 BackupSessions();
                 if (delete) Sessions.Remove(session);
                 else { session.game = game.Trim(); session.end = end; KnownGames.Add(session.game); }
-                SaveSessions();
             }
+            SaveSessionsNow();
         }
         internal static void PurgeNativeGame(string game)
         {
@@ -958,8 +1099,8 @@ namespace NixLanConsole
                 if (ActiveSessions.ContainsKey(game)) throw new InvalidOperationException("游戏仍在运行，请先退出游戏");
                 BackupSessions();
                 Sessions.RemoveAll(s => String.Equals(s.game, game, StringComparison.OrdinalIgnoreCase));
-                SaveSessions();
             }
+            SaveSessionsNow();
         }
         private static void BackupSessions()
         {
@@ -996,7 +1137,7 @@ namespace NixLanConsole
                 {
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     foreach (var s in ActiveSessions.Values) s.end = now;
-                    ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); SaveSessions();
+                    ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); MarkSessionsDirty(true);
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (!AnyGame && ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
                 }
                 return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
@@ -1019,7 +1160,7 @@ namespace NixLanConsole
                 long lastSaved = new DateTimeOffset(File.GetLastWriteTimeUtc(source)).ToUnixTimeMilliseconds();
                 Sessions.AddRange(loaded);
                 foreach (var session in Sessions) if (!String.IsNullOrWhiteSpace(session.game)) KnownGames.Add(session.game);
-                if (CloseInterruptedSessions(Sessions, lastSaved)) SaveSessions();
+                if (CloseInterruptedSessions(Sessions, lastSaved)) SaveSessionsNow();
             }
             catch (Exception ex) { Log("session load: " + ex.Message); }
         }
@@ -1044,17 +1185,69 @@ namespace NixLanConsole
             }
             return repaired;
         }
-        private static void SaveSessions()
+        private static GameSession CloneSession(GameSession session)
         {
-            string pending = SessionFile + ".pending";
-            try
+            return new GameSession
             {
-                File.WriteAllText(pending, Json.Serialize(Sessions.Take(1000).ToArray()), Encoding.UTF8);
-                if (File.Exists(SessionFile)) File.Replace(pending, SessionFile, SessionFile + ".previous", true);
-                else File.Move(pending, SessionFile);
+                id = session.id,
+                game = session.game,
+                start = session.start,
+                end = session.end,
+                samples = session.samples == null ? null : (GameMetricSample[])session.samples.Clone()
+            };
+        }
+
+        private static void MarkSessionsDirty(bool urgent)
+        {
+            SessionsDirty = true;
+            DateTime due = urgent ? DateTime.UtcNow : DateTime.UtcNow.AddSeconds(SessionSaveSeconds);
+            if (NextSessionSaveUtc == DateTime.MinValue || due < NextSessionSaveUtc) NextSessionSaveUtc = due;
+        }
+
+        // Called from the TCP loop once per second. It only takes Gate long enough to
+        // clone the session list; serialization and disk I/O happen after the lock is released.
+        private static void SaveSessionsIfDue()
+        {
+            SaveSessionsSnapshot(false);
+        }
+
+        internal static void FlushSessions()
+        {
+            SaveSessionsSnapshot(true);
+        }
+
+        private static void SaveSessionsNow()
+        {
+            SaveSessionsSnapshot(true);
+        }
+
+        private static void SaveSessionsSnapshot(bool force)
+        {
+            GameSession[] snapshot;
+            lock (Gate)
+            {
+                if (!SessionsDirty && !force) return;
+                if (!force && DateTime.UtcNow < NextSessionSaveUtc) return;
+                SessionsDirty = false;
+                NextSessionSaveUtc = DateTime.MinValue;
+                snapshot = Sessions.Take(1000).Select(CloneSession).ToArray();
             }
-            catch (Exception ex) { Log("session save: " + ex.Message); }
-            finally { try { if (File.Exists(pending)) File.Delete(pending); } catch { } }
+            lock (SaveGate)
+            {
+                string pending = SessionFile + ".pending";
+                try
+                {
+                    File.WriteAllText(pending, Json.Serialize(snapshot), Encoding.UTF8);
+                    if (File.Exists(SessionFile)) File.Replace(pending, SessionFile, SessionFile + ".previous", true);
+                    else File.Move(pending, SessionFile);
+                }
+                catch (Exception ex)
+                {
+                    Log("session save: " + ex.Message);
+                    lock (Gate) { SessionsDirty = true; NextSessionSaveUtc = DateTime.UtcNow.AddSeconds(5); }
+                }
+                finally { try { if (File.Exists(pending)) File.Delete(pending); } catch { } }
+            }
         }
         private static void Log(string message)
         {
@@ -1078,7 +1271,7 @@ namespace NixLanConsole
             Dashboard = new NativeConsoleWindow();
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开控制台", null, delegate { OpenDashboard(); });
-            menu.Items.Add("退出程序", null, delegate { Environment.Exit(0); });
+            menu.Items.Add("退出程序", null, delegate { DisplayServer.FlushSessions(); Environment.Exit(0); });
             Icon = new NotifyIcon { Text = "局域网桌面控制台", Icon = SystemIcons.Application, ContextMenuStrip = menu, Visible = true };
             Icon.DoubleClick += delegate { OpenDashboard(); };
         }
@@ -1096,8 +1289,8 @@ namespace NixLanConsole
             if (Dispatcher.InvokeRequired) { try { Dispatcher.BeginInvoke(new MethodInvoker(MinimizeDashboard)); } catch { } return; }
             if (Dashboard != null && !Dashboard.IsDisposed) Dashboard.Hide();
         }
-        public void CloseDashboard() { Environment.Exit(0); }
-        protected override void ExitThreadCore() { Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
+        public void CloseDashboard() { DisplayServer.FlushSessions(); Environment.Exit(0); }
+        protected override void ExitThreadCore() { DisplayServer.FlushSessions(); Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
     }
 
     internal sealed class HostTrayContext : ApplicationContext

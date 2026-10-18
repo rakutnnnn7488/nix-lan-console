@@ -50,7 +50,7 @@ namespace NixLanConsole
             FormBorderStyle = FormBorderStyle.None;
             Padding = new Padding(4);
             BackColor = Color.FromArgb(64, 48, 150);
-            string fontPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "game-assets", "zpix.ttf");
+            string fontPath = System.IO.Path.Combine(BuildInfo.InstallDir, "game-assets", "zpix.ttf");
             if (System.IO.File.Exists(fontPath))
             {
                 try { PixelFonts.AddFontFile(fontPath); PixelFont = new Font(PixelFonts.Families[0], 16, FontStyle.Regular, GraphicsUnit.Pixel); Font = PixelFont; }
@@ -309,7 +309,7 @@ namespace NixLanConsole
             AutoUpdate = new CheckBox { Text = "副机自动更新", Checked = State.autoUpdate, Width = 600, Height = 38 };
             HostAutoUpdate = new CheckBox { Text = "主机自动更新（游戏运行时暂缓）", Checked = State.hostAutoUpdate, Width = 600, Height = 38 };
             versionLayout.Controls.Add(AutoUpdate); versionLayout.Controls.Add(HostAutoUpdate);
-            versionLayout.Controls.Add(new Label { Text = "主机 IPv4 地址（当前主机：192.168.1.7）", Width = 600, Height = 25, Padding = new Padding(0, 5, 0, 0) });
+            versionLayout.Controls.Add(new Label { Text = "主机 IPv4 地址（当前主机：" + (State.hostAddress ?? "192.168.1.7") + "）", Width = 600, Height = 25, Padding = new Padding(0, 5, 0, 0) });
             HostAddress = new TextBox { Text = State.hostAddress ?? "192.168.1.7", Width = 300, Height = 28 };
             versionLayout.Controls.Add(HostAddress);
             var versionActions = new FlowLayoutPanel { Width = 610, Height = 50 };
@@ -352,4 +352,5 @@ namespace NixLanConsole
         }
     }
 }
+
 

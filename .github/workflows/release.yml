@@ -4,7 +4,6 @@ on:
     branches: [main]
     paths:
       - 'src/**'
-      - 'ApplyUpdate.ps1'
       - 'build.ps1'
       - 'version.txt'
       - '.github/workflows/release.yml'
@@ -23,14 +22,16 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'version.txt must have four numeric parts' }
           if ((Get-Content src\ControlConsole.cs -Raw) -notmatch ('public const string Version = "' + [regex]::Escape($version) + '"')) { throw 'BuildInfo.Version does not match version.txt' }
           powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
-          Compress-Archive -Path build\ControlConsole.exe,build\Updater.exe,build\ApplyUpdate.ps1,build\version.txt -DestinationPath "ControlConsole-update-$version.zip" -CompressionLevel Optimal
+          $stage = Join-Path $env:RUNNER_TEMP "update-$version"
+          New-Item -ItemType Directory -Path (Join-Path $stage "versions\$version") -Force | Out-Null
+          Copy-Item "build\versions\$version\ControlConsole.exe" (Join-Path $stage "versions\$version\ControlConsole.exe") -Force
+          Copy-Item "build\version.txt" (Join-Path $stage "version.txt") -Force
           $archive = "ControlConsole-update-$version.zip"
-          foreach ($case in @('install','rollback')) {
-            $target = Join-Path $env:RUNNER_TEMP "nix-updater-$case-$version"
-            $test = if ($case -eq 'install') { '--test-install' } else { '--test-rollback' }
-            $process = Start-Process -FilePath (Resolve-Path build\Updater.exe) -ArgumentList @($test, ('"' + $target + '"'), ('"' + (Resolve-Path $archive) + '"')) -WindowStyle Hidden -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw "Updater $case test failed: $($process.ExitCode)" }
-          }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+          $check = Join-Path $env:RUNNER_TEMP "check-$version"
+          Expand-Archive -LiteralPath $archive -DestinationPath $check -Force
+          if (!(Test-Path (Join-Path $check "versions\$version\ControlConsole.exe"))) { throw 'Update package is missing the versioned application' }
+          if (((Get-Content (Join-Path $check 'version.txt') -Raw).Trim()) -ne $version) { throw 'Update package version.txt mismatch' }
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $archive" -Encoding ascii
           "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
@@ -44,3 +45,4 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Increase the version before publishing." }
           gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" "ControlConsole-update-$env:RELEASE_VERSION.zip.sha256" --title $tag --notes 'Code update only. Install the local full package once before using automatic updates.' --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+

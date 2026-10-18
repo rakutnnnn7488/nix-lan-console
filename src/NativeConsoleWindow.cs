@@ -644,7 +644,7 @@ namespace NixLanConsole
         {
             try
             {
-                string assets = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "game-assets");
+                string assets = Path.Combine(BuildInfo.InstallDir, "game-assets");
                 string manifest = Path.Combine(assets, "native-role", "角色动画.json");
                 if (File.Exists(Path.Combine(assets, "zpix.ttf")))
                 {
@@ -728,7 +728,7 @@ namespace NixLanConsole
                     {
                         var frameData = value as Dictionary<string, object>; if (frameData == null) continue;
                         string relative = Convert.ToString(frameData["src"]).Replace('/', Path.DirectorySeparatorChar);
-                        string path = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, relative));
+                        string path = Path.GetFullPath(Path.Combine(BuildInfo.InstallDir, relative));
                         if (!path.StartsWith(Path.GetFullPath(assets).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(path)) continue;
                         Image image;
                         if (!FrameCache.TryGetValue(path, out image)) { image = LoadDetachedImage(path); FrameCache[path] = image; }
