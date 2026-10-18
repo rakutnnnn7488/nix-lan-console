@@ -184,11 +184,13 @@ namespace NixLanConsole
             { "VALORANT-Win64-Shipping.exe", "无畏契约" }, { "League of Legends.exe", "英雄联盟" },
             { "Overwatch.exe", "守望先锋" }, { "Diablo IV.exe", "暗黑破坏神 IV" },
             { "FortniteClient-Win64-Shipping.exe", "堡垒之夜" }, { "Minecraft.Windows.exe", "我的世界" },
-            { "Warframe.x64.exe", "Warframe" }, { "r5apex.exe", "Apex Legends" },
+            { "Warframe.x64.exe", "Warframe" }, { "r5apex.exe", "Apex Legends" }, { "r5apex_dx12.exe", "Apex Legends" },
             { "TslGame.exe", "绝地求生" }, { "Cyberpunk2077.exe", "赛博朋克 2077" },
             { "eldenring.exe", "艾尔登法环" }, { "RDR2.exe", "荒野大镖客 2" },
             { "GTA5.exe", "GTA V" }, { "MonsterHunterWorld.exe", "怪物猎人：世界" },
-            { "MonsterHunterRise.exe", "怪物猎人：崛起" }
+            { "MonsterHunterRise.exe", "怪物猎人：崛起" }, { "MonsterHunterWilds.exe", "怪物猎人：荒野" },
+            { "Windose.exe", "NEEDY GIRL OVERDOSE" }, { "cs2.exe", "Counter-Strike 2" },
+            { "SlayTheSpire2.exe", "Slay the Spire 2" }, { "P3R.exe", "Persona 3 Reload" }
         };
         private static readonly object ControlGate = new object();
         private static HashSet<string> RemoteExcludedGames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -322,15 +324,26 @@ namespace NixLanConsole
             {
                 try
                 {
-                    string path = Path.GetFullPath(p.MainModule.FileName);
+                    string path = null;
+                    try { path = Path.GetFullPath(p.MainModule.FileName); } catch { }
                     string title;
-                    if ((CustomGameExecutables.TryGetValue(path, out title) || GameExecutables.TryGetValue(path, out title) || KnownGameProcesses.TryGetValue(Path.GetFileName(path), out title)) && !IsSystemUtility(path, title) && !excluded.Contains(title)) names.Add(title);
+                    if (TryResolveGame(path, p.ProcessName, out title) && !excluded.Contains(title)) names.Add(title);
                 }
                 catch { }
                 finally { p.Dispose(); }
             }
             GameRunning = names.Count > 0;
             return names.ToArray();
+        }
+        private static bool TryResolveGame(string path, string processName, out string title)
+        {
+            title = null;
+            if (!String.IsNullOrWhiteSpace(path) && (CustomGameExecutables.TryGetValue(path, out title) || GameExecutables.TryGetValue(path, out title)))
+                return !IsSystemUtility(path, title);
+            if (String.IsNullOrWhiteSpace(processName)) return false;
+            string exe = Path.GetFileName(processName);
+            if (!exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) exe += ".exe";
+            return KnownGameProcesses.TryGetValue(exe, out title) && !IsSystemUtility(exe, title);
         }
         private static void DiscoverGames()
         {
@@ -453,7 +466,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.2.3"; }
+    internal static class BuildInfo { public const string Version = "1.6.2.4"; }
 
     internal static class DisplayServer
     {
