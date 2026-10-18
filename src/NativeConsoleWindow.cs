@@ -23,6 +23,7 @@ namespace NixLanConsole
         private readonly PictureBox[] MetricIcons = new PictureBox[4];
         private readonly List<Image> MetricIconImages = new List<Image>();
         private readonly Label GameList;
+        private readonly Label RecordDayBadge;
         private readonly Panel RecapSparkline;
         private GameSession LatestRecap;
         private readonly PictureBox RecordAvatar;
@@ -77,7 +78,10 @@ namespace NixLanConsole
         private Font PixelTinyText;
         private Font ManagerText;
         private Font ManagerSmallText;
-        private Font JineText;
+        private Font ManagerTinyText;
+        private Font MetricNumberText;
+        private Font MetricCompactText;
+        private Font MetricTemperatureText;
         private Font LiveText;
         private Image StartBackground;
         private Image StartPressedBackground;
@@ -145,8 +149,8 @@ namespace NixLanConsole
             var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(9, 6, 9, 7), BackColor = Color.FromArgb(250, 242, 251) };
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-            for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 18));
-            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 28));
+            for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 20));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 20));
             HostState = new Label { Text = "主机离线", Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(82, 79, 153), BackColor = Color.FromArgb(224, 211, 242), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) }; metrics.Controls.Add(HostState, 0, 0);
             string[] metricNames = { "CPU", "内存", "GPU", "温度" };
             for (int i = 0; i < metricNames.Length; i++)
@@ -170,19 +174,12 @@ namespace NixLanConsole
                     name.Location = new Point(compact ? 39 : 51, 0);
                     name.Width = Math.Max(46, track.Left - name.Left);
                     name.Height = compact ? 12 : 19;
-                    MetricValues[rowIndex].Location = new Point(compact ? 39 : 51, compact ? 11 : 18);
-                    MetricValues[rowIndex].Height = compact ? 13 : 24;
+                    MetricValues[rowIndex].Location = new Point(compact ? 39 : 51, compact ? 10 : 17);
+                    MetricValues[rowIndex].Height = compact ? 18 : 31;
                     MetricValues[rowIndex].Width = Math.Max(52, track.Left - MetricValues[rowIndex].Left);
-                    if (ManagerSmallText != null)
-                    {
-                        MetricValues[rowIndex].Font = compact ? ManagerSmallText : ManagerText;
-                        name.Font = ManagerSmallText;
-                    }
-                    else if (PixelSmallText != null)
-                    {
-                        MetricValues[rowIndex].Font = compact ? PixelSmallText : PixelText;
-                        name.Font = compact ? PixelTinyText : PixelSmallText;
-                    }
+                    if (MetricNumberText != null) MetricValues[rowIndex].Font = compact ? MetricCompactText : rowIndex == 3 ? MetricTemperatureText : MetricNumberText;
+                    if (ManagerSmallText != null) name.Font = compact ? ManagerTinyText : ManagerSmallText;
+                    else if (PixelText != null) name.Font = compact ? PixelSmallText : PixelText;
                 };
                 metrics.Controls.Add(row, 0, i + 1);
             }
@@ -193,7 +190,7 @@ namespace NixLanConsole
 
             RecordsCard = Card("游戏记录", 615);
             var jine = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(228, 155, 233), BackgroundImageLayout = ImageLayout.Stretch };
-            var dayBadge = new Label { Text = "第 1 天  /  主机游戏日志  /  最近 7 天", TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(206, 210, 239), ForeColor = Color.FromArgb(63, 46, 144), Height = 35, Dock = DockStyle.Top };
+            RecordDayBadge = new Label { Text = "第 1 天  /  主机游戏日志  /  最近 7 天", TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(206, 210, 239), ForeColor = Color.FromArgb(63, 46, 144), Height = 35, Dock = DockStyle.Top };
             RecordAvatar = new PictureBox { SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Transparent };
             RecordTail = new PictureBox { SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Transparent };
             GameList = new Label { Text = "等待主机游戏记录…", AutoEllipsis = true, ForeColor = Color.FromArgb(70, 59, 143), BackColor = Color.FromArgb(218, 237, 255), Font = new Font("Microsoft YaHei UI", 10F), Padding = new Padding(12), Cursor = Cursors.Hand };
@@ -203,7 +200,7 @@ namespace NixLanConsole
             RecapSparkline.Click += delegate { ShowLatestGameRecap(); };
             RecordsOpenHint = new Label { Text = "查看完整游戏记录  ▶", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(59, 55, 142), BackColor = Color.FromArgb(210, 239, 81), Cursor = Cursors.Hand };
             RecordsOpenHint.Click += delegate { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); };
-            jine.Controls.Add(GameList); jine.Controls.Add(RecapSparkline); jine.Controls.Add(RecordTail); jine.Controls.Add(RecordAvatar); jine.Controls.Add(RecordsOpenHint); jine.Controls.Add(dayBadge);
+            jine.Controls.Add(GameList); jine.Controls.Add(RecapSparkline); jine.Controls.Add(RecordTail); jine.Controls.Add(RecordAvatar); jine.Controls.Add(RecordsOpenHint); jine.Controls.Add(RecordDayBadge);
             jine.Resize += delegate { LayoutRecordMessages(jine); };
             RecordsCard.Controls.Add(jine); Desktop.Controls.Add(RecordsCard);
             LiveCard = Card("直播", 1336);
@@ -306,7 +303,10 @@ namespace NixLanConsole
                 if (RecordTail.Image != null) RecordTail.Image.Dispose();
                 if (ManagerText != null) ManagerText.Dispose();
                 if (ManagerSmallText != null) ManagerSmallText.Dispose();
-                if (JineText != null) JineText.Dispose();
+                if (ManagerTinyText != null) ManagerTinyText.Dispose();
+                if (MetricNumberText != null) MetricNumberText.Dispose();
+                if (MetricCompactText != null) MetricCompactText.Dispose();
+                if (MetricTemperatureText != null) MetricTemperatureText.Dispose();
                 if (LiveText != null) LiveText.Dispose();
                 if (InterfaceFonts != null) InterfaceFonts.Dispose();
                 if (PixelText != null) PixelText.Dispose();
@@ -637,32 +637,38 @@ namespace NixLanConsole
                     PixelText = new Font(PixelFonts.Families[0], 16, FontStyle.Regular, GraphicsUnit.Pixel);
                     PixelSmallText = new Font(PixelFonts.Families[0], 11, FontStyle.Regular, GraphicsUnit.Pixel);
                     PixelTinyText = new Font(PixelFonts.Families[0], 10, FontStyle.Regular, GraphicsUnit.Pixel);
-                    HostState.Font = PixelText; GameList.Font = PixelText; TaskbarStatus.Font = PixelText;
-                    foreach (var value in MetricValues) value.Font = value.Parent.Height < 40 ? PixelSmallText : PixelText;
-                    foreach (var name in MetricNames) name.Font = name.Parent.Height < 40 ? PixelTinyText : PixelSmallText;
+                    MetricNumberText = new Font(PixelFonts.Families[0], 28, FontStyle.Regular, GraphicsUnit.Pixel);
+                    MetricCompactText = new Font(PixelFonts.Families[0], 15, FontStyle.Regular, GraphicsUnit.Pixel);
+                    MetricTemperatureText = new Font(PixelFonts.Families[0], 21, FontStyle.Regular, GraphicsUnit.Pixel);
+                    HostState.Font = PixelText; GameList.Font = PixelText; RecordDayBadge.Font = PixelText;
+                    RecordsOpenHint.Font = PixelText; TaskbarStatus.Font = PixelText;
+                    for (int i = 0; i < MetricValues.Length; i++) MetricValues[i].Font = MetricValues[i].Parent.Height < 40 ? MetricCompactText : i == 3 ? MetricTemperatureText : MetricNumberText;
+                    foreach (var name in MetricNames) name.Font = PixelText;
                     foreach (Control control in Taskbar.Controls) if (control is Button) control.Font = PixelText;
                 }
                 string managerFontPath = Path.Combine(assets, "PixelMplus10-Regular.ttf");
-                string jineFontPath = Path.Combine(assets, "DinkieBitmap-7px.ttf");
                 string liveFontPath = Path.Combine(assets, "DinkieBitmap-9px.ttf");
-                if (File.Exists(managerFontPath) && File.Exists(jineFontPath) && File.Exists(liveFontPath))
+                try
                 {
                     InterfaceFonts = new PrivateFontCollection();
-                    InterfaceFonts.AddFontFile(managerFontPath);
-                    var managerFamily = InterfaceFonts.Families[0];
-                    InterfaceFonts.AddFontFile(jineFontPath);
-                    var jineFamily = InterfaceFonts.Families.First(f => f.Name != managerFamily.Name);
-                    InterfaceFonts.AddFontFile(liveFontPath);
-                    var liveFamily = InterfaceFonts.Families.First(f => f.Name != managerFamily.Name && f.Name != jineFamily.Name);
-                    ManagerText = new Font(managerFamily, 16, FontStyle.Regular, GraphicsUnit.Pixel);
-                    ManagerSmallText = new Font(managerFamily, 11, FontStyle.Regular, GraphicsUnit.Pixel);
-                    JineText = new Font(jineFamily, 16, FontStyle.Regular, GraphicsUnit.Pixel);
-                    LiveText = new Font(liveFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel);
-                    HostState.Font = ManagerText;
-                    foreach (var value in MetricValues) value.Font = ManagerText;
-                    foreach (var name in MetricNames) name.Font = ManagerSmallText;
-                    GameList.Font = JineText;
+                    if (File.Exists(managerFontPath))
+                    {
+                        InterfaceFonts.AddFontFile(managerFontPath);
+                        var family = InterfaceFonts.Families.First(f => f.Name.StartsWith("PixelMplus10", StringComparison.OrdinalIgnoreCase));
+                        ManagerText = new Font(family, 18, FontStyle.Regular, GraphicsUnit.Pixel);
+                        ManagerSmallText = new Font(family, 16, FontStyle.Regular, GraphicsUnit.Pixel);
+                        ManagerTinyText = new Font(family, 12, FontStyle.Regular, GraphicsUnit.Pixel);
+                        HostState.Font = ManagerText;
+                        foreach (var name in MetricNames) name.Font = name.Parent.Height < 40 ? ManagerTinyText : ManagerSmallText;
+                    }
+                    if (File.Exists(liveFontPath))
+                    {
+                        InterfaceFonts.AddFontFile(liveFontPath);
+                        var family = InterfaceFonts.Families.First(f => f.Name.StartsWith("DinkieBitmap 9px", StringComparison.OrdinalIgnoreCase));
+                        LiveText = new Font(family, 18, FontStyle.Regular, GraphicsUnit.Pixel);
+                    }
                 }
+                catch (Exception ex) { StartupDiagnostics.Write("optional interface font: " + ex.Message); }
                 if (File.Exists(Path.Combine(assets, "bg_stream_native.png"))) CharacterBackground = LoadDetachedImage(Path.Combine(assets, "bg_stream_native.png"));
                 if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png"));
                 if (File.Exists(Path.Combine(assets, "desktop_wallpaper.png"))) DesktopBackground = LoadDetachedImage(Path.Combine(assets, "desktop_wallpaper.png"));
@@ -783,12 +789,12 @@ namespace NixLanConsole
             if (CharacterBackground != null) g.DrawImage(CharacterBackground, video);
             Image frame = CurrentFrame();
             if (frame != null) g.DrawImage(frame, video);
-            using (var font = LiveText != null ? new Font(LiveText.FontFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel) : PixelText == null ? new Font("Microsoft YaHei UI", 12F) : new Font(PixelText.FontFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 12F) : new Font(PixelText.FontFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var ink = new SolidBrush(Color.FromArgb(69, 53, 153)))
             {
                 g.DrawString("超天酱来啦！", font, ink, (int)(65 * sx), (int)(588 * sy));
-                g.DrawString("主机正在运行：" + LiveGameName, font, ink, (int)(65 * sx), (int)(633 * sy));
-                g.DrawString("正在选择留言", font, ink, (int)(900 * sx), (int)(104 * sy));
+                g.DrawString("主机正在运行：" + LiveGameName, LiveText ?? font, ink, (int)(65 * sx), (int)(633 * sy));
+                g.DrawString("正在选择留言", LiveText ?? font, ink, (int)(900 * sx), (int)(104 * sy));
                 string[] lines = { "正在记录游戏时长", "主机游戏：" + LiveGameName, "主机状态已连接", "超天酱陪你玩游戏！", "切回桌面可查看统计", "今天也一起加油！" };
                 for (int i = 0; i < lines.Length; i++)
                 {
@@ -890,7 +896,7 @@ namespace NixLanConsole
         {
             var rect = Chart.ClientRectangle; if (rect.Width < 50 || rect.Height < 40) return;
             Color[] colors = { Color.FromArgb(74, 57, 171), Color.FromArgb(91, 174, 206), Color.FromArgb(202, 113, 179) };
-            using (var font = new Font("Microsoft YaHei UI", 8F))
+            using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 8F) : new Font(PixelText.FontFamily, 11, FontStyle.Regular, GraphicsUnit.Pixel))
             {
                 string[] labels = { "CPU", "内存", "GPU" };
                 for (int i = 0; i < 3; i++) using (var brush = new SolidBrush(colors[i])) e.Graphics.DrawString(labels[i], font, brush, 8 + i * 52, 0);

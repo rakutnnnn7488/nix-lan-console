@@ -472,7 +472,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.3.1"; }
+    internal static class BuildInfo { public const string Version = "1.6.3.2"; }
 
     internal static class DisplayServer
     {
