@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -446,6 +446,12 @@ namespace NixLanConsole
         public string game;
         public long start;
         public long end;
+        public GameMetricSample[] samples;
+    }
+    internal sealed class GameMetricSample
+    {
+        public long utc;
+        public double cpu, gpu, cpuTemp, gpuTemp;
     }
     internal sealed class DashboardState
     {
@@ -466,7 +472,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.2.4"; }
+    internal static class BuildInfo { public const string Version = "1.6.3.1"; }
 
     internal static class DisplayServer
     {
@@ -488,7 +494,7 @@ namespace NixLanConsole
         private static int UpdateStarted;
         private static readonly object UpdateProgressGate = new object();
         private static string UpdateProgressState = "idle";
-        private static string UpdateProgressMessage = "每 5 分钟检查 GitHub 最新版本。";
+        private static string UpdateProgressMessage = "每 30 分钟检查 GitHub 最新版本。";
         private static string UpdateProgressVersion = "";
         private static int UpdateProgressPercent = -1;
         private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -514,7 +520,7 @@ namespace NixLanConsole
         public static void Run()
         {
             Directory.CreateDirectory(DataDir); LoadSettings(); LoadSessions();
-            UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
+            UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(30));
             Tray = new TrayContext();
             var tcpThread = new Thread(ReadTcp) { IsBackground = true }; tcpThread.Start();
             StartupDiagnostics.Ready("--display");
@@ -541,16 +547,9 @@ namespace NixLanConsole
                     }
                 }
                 SetUpdateProgress("checking", 3, "", "正在检查更新版本…");
-                string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 Version current; if (!Version.TryParse(BuildInfo.Version, out current)) return;
                 Version available = null; string sourceZip = null;
-                foreach (string candidate in Directory.Exists(downloads) ? Directory.GetFiles(downloads, "ControlConsole*.zip") : new string[0])
-                {
-                    Version candidateVersion;
-                    if (!ReadPackageVersion(candidate, out candidateVersion) || candidateVersion <= current) continue;
-                    if (available == null || candidateVersion > available) { available = candidateVersion; sourceZip = candidate; }
-                }
-                string githubZip = FindGitHubUpdate(current, available);
+                string githubZip = FindGitHubUpdate(current, null);
                 if (githubZip != null)
                 {
                     Version githubVersion;
@@ -566,8 +565,8 @@ namespace NixLanConsole
                 }
                 SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在验证并准备安装…");
                 string updateDir = Path.Combine(DataDir, "updates"); Directory.CreateDirectory(updateDir);
-                string localZip = Path.Combine(updateDir, Path.GetFileName(sourceZip));
-                if (!String.Equals(Path.GetFullPath(sourceZip), Path.GetFullPath(localZip), StringComparison.OrdinalIgnoreCase)) File.Copy(sourceZip, localZip, true);
+                string localZip = Path.Combine(updateDir, "pending-" + available + "-" + Guid.NewGuid().ToString("N") + ".zip");
+                File.Copy(sourceZip, localZip, false);
                 string updater = Path.Combine(BaseDir, "Updater.exe");
                 if (!File.Exists(updater)) throw new FileNotFoundException("更新程序不存在", updater);
                 string localUpdater = Path.Combine(updateDir, "Updater-" + Guid.NewGuid().ToString("N") + ".exe");
@@ -589,9 +588,9 @@ namespace NixLanConsole
         private static string FindGitHubUpdate(Version current, Version localAvailable)
         {
             string config = Path.Combine(BaseDir, "update-source.txt");
-            if (!File.Exists(config)) return null;
+            if (!File.Exists(config)) throw new FileNotFoundException("未配置 GitHub 更新地址。", config);
             string repository = File.ReadAllText(config, Encoding.UTF8).Trim();
-            if (!Regex.IsMatch(repository, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")) return null;
+            if (!Regex.IsMatch(repository, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")) throw new InvalidDataException("GitHub 更新地址格式无效。");
             try
             {
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
@@ -616,8 +615,9 @@ namespace NixLanConsole
                         string temp = path + ".download";
                         try
                         {
-                            SetUpdateProgress("downloading", 0, version.ToString(), "正在下载更新包… 0%");
+                            SetUpdateProgress("downloading", -1, version.ToString(), "正在连接 GitHub 下载更新包…");
                             Exception downloadError = null;
+                            bool downloadCancelled = false;
                             using (var done = new ManualResetEvent(false))
                             using (var downloadClient = new WebClient())
                             {
@@ -627,10 +627,11 @@ namespace NixLanConsole
                                     int percent = e.TotalBytesToReceive > 0 ? e.ProgressPercentage : -1;
                                     SetUpdateProgress("downloading", percent, version.ToString(), "正在下载更新包… " + amount);
                                 };
-                                downloadClient.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; done.Set(); };
+                                downloadClient.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; downloadCancelled = e.Cancelled; done.Set(); };
                                 downloadClient.DownloadFileAsync(url, temp);
-                                if (!done.WaitOne(TimeSpan.FromMinutes(10))) { downloadClient.CancelAsync(); throw new TimeoutException("更新包下载超时。"); }
+                                if (!done.WaitOne(TimeSpan.FromMinutes(10))) { downloadClient.CancelAsync(); done.WaitOne(5000); throw new TimeoutException("更新包下载超时。"); }
                             }
+                            if (downloadCancelled) throw new IOException("更新包下载已取消。");
                             if (downloadError != null) throw downloadError;
                             SetUpdateProgress("verifying", 97, version.ToString(), "下载完成，正在校验更新包…");
                             string digest = asset.ContainsKey("digest") ? Convert.ToString(asset["digest"]) : "";
@@ -643,6 +644,7 @@ namespace NixLanConsole
                                     if (!actual.Equals(digest.Substring(7), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包校验失败，文件可能已损坏。");
                                 }
                             }
+                            else VerifyPublishedChecksum(repository, version, temp);
                             Version embedded;
                             if (!ReadPackageVersion(temp, out embedded) || embedded != version) throw new InvalidDataException("更新包中的版本信息无效。");
                             if (File.Exists(path)) File.Delete(path);
@@ -651,6 +653,7 @@ namespace NixLanConsole
                         }
                         finally { if (File.Exists(temp)) File.Delete(temp); }
                     }
+                    throw new FileNotFoundException("GitHub Release 未附带对应版本的更新包。");
                 }
             }
             catch (Exception ex)
@@ -667,7 +670,7 @@ namespace NixLanConsole
                         string temp = path + ".download";
                         try
                         {
-                            SetUpdateProgress("downloading", 0, fallback.ToString(), "正在下载更新包… 0%");
+                            SetUpdateProgress("downloading", -1, fallback.ToString(), "正在连接 GitHub 下载更新包…");
                             using (var client = new WebClient())
                             {
                                 client.Headers[HttpRequestHeader.UserAgent] = "NixLanConsole/" + BuildInfo.Version;
@@ -678,12 +681,15 @@ namespace NixLanConsole
                                 using (var done = new ManualResetEvent(false))
                                 {
                                     Exception downloadError = null;
-                                    client.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; done.Set(); };
+                                    bool downloadCancelled = false;
+                                    client.DownloadFileCompleted += delegate(object sender, System.ComponentModel.AsyncCompletedEventArgs e) { downloadError = e.Error; downloadCancelled = e.Cancelled; done.Set(); };
                                     client.DownloadFileAsync(new Uri(assetUrl), temp);
-                                    if (!done.WaitOne(TimeSpan.FromMinutes(10))) { client.CancelAsync(); throw new TimeoutException("更新包下载超时。"); }
+                                    if (!done.WaitOne(TimeSpan.FromMinutes(10))) { client.CancelAsync(); done.WaitOne(5000); throw new TimeoutException("更新包下载超时。"); }
+                                    if (downloadCancelled) throw new IOException("更新包下载已取消。");
                                     if (downloadError != null) throw downloadError;
                                 }
                             }
+                            VerifyPublishedChecksum(repository, fallback, temp);
                             Version embedded;
                             if (!ReadPackageVersion(temp, out embedded) || embedded != fallback) throw new InvalidDataException("更新包中的版本信息无效。");
                             if (File.Exists(path)) File.Delete(path);
@@ -696,9 +702,27 @@ namespace NixLanConsole
                 catch (Exception fallbackError)
                 {
                     try { File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " GitHub web fallback: " + fallbackError.Message + Environment.NewLine, Encoding.UTF8); } catch { }
+                    throw new IOException("GitHub 更新检查失败，API 与网页备用路径均不可用。", fallbackError);
                 }
             }
             return null;
+        }
+        private static void VerifyPublishedChecksum(string repository, Version version, string archivePath)
+        {
+            string fileName = "ControlConsole-update-" + version + ".zip";
+            string checksumUrl = "https://github.com/" + repository + "/releases/download/v" + version + "/" + fileName + ".sha256";
+            string expected;
+            using (var client = new WebClient())
+            {
+                client.Headers[HttpRequestHeader.UserAgent] = "NixLanConsole/" + BuildInfo.Version;
+                expected = client.DownloadString(checksumUrl).Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            }
+            if (!Regex.IsMatch(expected, @"\A[0-9a-fA-F]{64}\z")) throw new InvalidDataException("更新包校验文件格式无效。");
+            using (var file = File.OpenRead(archivePath)) using (var sha = SHA256.Create())
+            {
+                string actual = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "");
+                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包 SHA-256 校验失败，已拒绝安装。");
+            }
         }
         private static string LatestReleaseVersionFromWeb(string repository)
         {
@@ -800,7 +824,19 @@ namespace NixLanConsole
                 {
                     ActiveSessions[name] = new GameSession { id = Guid.NewGuid().ToString("N"), game = name, start = p.utc, end = 0 };
                     Sessions.Insert(0, ActiveSessions[name]);
+                    // Keep detailed curves for recent sessions without growing sessions.json indefinitely.
+                    foreach (var old in Sessions.Skip(50)) old.samples = null;
                 }
+            foreach (var session in ActiveSessions.Values)
+            {
+                var samples = session.samples == null ? new List<GameMetricSample>() : session.samples.ToList();
+                if (samples.Count == 0 || p.utc - samples[samples.Count - 1].utc >= 20000)
+                {
+                    samples.Add(new GameMetricSample { utc = p.utc, cpu = p.cpu, gpu = p.gpu, cpuTemp = p.cpuTemp, gpuTemp = p.gpuTemp });
+                    if (samples.Count > 240) samples = samples.Where((sample, index) => index % 2 == 0).ToList();
+                    session.samples = samples.ToArray();
+                }
+            }
             foreach (string name in ActiveSessions.Keys.ToArray())
                 if (!current.Contains(name)) { ActiveSessions[name].end = p.utc; ActiveSessions.Remove(name); }
             bool running = current.Count > 0;
@@ -941,7 +977,7 @@ namespace NixLanConsole
                     ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); SaveSessions();
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (!AnyGame && ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
                 }
-                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
+                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
             }
         }
         private static string SessionFile { get { return Path.Combine(DataDir, "sessions.json"); } }
@@ -1057,3 +1093,4 @@ namespace NixLanConsole
         protected override void ExitThreadCore() { Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
     }
 }
+

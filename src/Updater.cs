@@ -230,6 +230,11 @@ namespace NixLanConsoleUpdater
             if (String.IsNullOrEmpty(parentDir) || !Directory.Exists(target)) throw new DirectoryNotFoundException("旧版本目录不存在。");
             if (!File.Exists(Path.Combine(target, "ControlConsole.exe"))) throw new FileNotFoundException("旧版程序不存在。");
             string version = PackageVersion(archivePath);
+            Version oldVersion, newVersion;
+            string installedVersion = Path.Combine(target, "version.txt");
+            if (File.Exists(installedVersion) && Version.TryParse(File.ReadAllText(installedVersion).Trim().TrimStart('\uFEFF'), out oldVersion)
+                && Version.TryParse(version, out newVersion) && newVersion <= oldVersion)
+                throw new InvalidOperationException("更新包版本未高于当前安装版本。");
             string stage = target + ".staging-" + Guid.NewGuid().ToString("N");
             string backup = target + ".backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             bool movedOld = false, movedNew = false;

@@ -88,8 +88,9 @@ namespace NixLanConsole
             var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 84, Padding = new Padding(12, 6, 0, 0), FlowDirection = FlowDirection.LeftToRight, BackColor = Color.FromArgb(248, 235, 250) };
             Summary = new Label { Text = "", Width = 360, Height = 55, TextAlign = ContentAlignment.MiddleLeft };
             var edit = MakeButton("修改选中记录"); edit.Click += delegate { EditSelected(); };
+            var recap = MakeButton("查看本次回顾"); recap.Click += delegate { ShowSelectedRecap(); };
             var remove = MakeButton("删除选中记录"); remove.Click += delegate { DeleteSelected(); };
-            bottom.Controls.Add(Summary); bottom.Controls.Add(edit); bottom.Controls.Add(remove); Controls.Add(bottom);
+            bottom.Controls.Add(Summary); bottom.Controls.Add(recap); bottom.Controls.Add(edit); bottom.Controls.Add(remove); Controls.Add(bottom);
             var content = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 235, 250) };
             title.Dock = top.Dock = tabs.Dock = bottom.Dock = DockStyle.None;
             content.Controls.Add(title); content.Controls.Add(top); content.Controls.Add(tabs); content.Controls.Add(bottom);
@@ -155,6 +156,12 @@ namespace NixLanConsole
             Summary.Text = "游戏 " + totals.Count + " 个  ·  合计 " + Duration(totals.Values.Sum());
         }
         private GameSession SelectedSession() { return Sessions.SelectedRows.Count == 0 ? null : Sessions.SelectedRows[0].Tag as GameSession; }
+        private void ShowSelectedRecap()
+        {
+            var session = SelectedSession();
+            if (session == null || session.end <= session.start) { MessageBox.Show(this, "请在逐次记录中选择已结束的游戏。", "游戏回顾"); return; }
+            using (var dialog = new NativeSessionRecapDialog(session)) dialog.ShowDialog(this);
+        }
         private void EditSelected()
         {
             var session = SelectedSession(); if (session == null) { MessageBox.Show(this, "请切换到逐次记录并选中一条。", "游戏记录"); return; }
@@ -174,6 +181,79 @@ namespace NixLanConsole
         }
         private static string TimeText(long value) { return DateTimeOffset.FromUnixTimeMilliseconds(value).LocalDateTime.ToString("yyyy-MM-dd HH:mm"); }
         private static string Duration(long value) { long minutes = Math.Max(0, value / 60000); return (minutes / 60) + " 小时 " + (minutes % 60) + " 分"; }
+    }
+
+    internal sealed class NativeSessionRecapDialog : NativeDialog
+    {
+        private readonly GameSession Session;
+        private readonly Panel Curves;
+        private readonly string[] Names = { "CPU 使用率", "GPU 使用率", "CPU 温度", "GPU 温度" };
+        private readonly Color[] Colors = { Color.FromArgb(76, 58, 170), Color.FromArgb(87, 168, 211), Color.FromArgb(207, 109, 176), Color.FromArgb(112, 180, 154) };
+
+        internal NativeSessionRecapDialog(GameSession session) : base("本次游戏回顾", 820, 620)
+        {
+            Session = session;
+            var title = new Label { Dock = DockStyle.Top, Height = 62, Text = "♡  " + session.game + "  ·  游玩回顾", Font = new Font("Microsoft YaHei UI", 17F, FontStyle.Bold), ForeColor = Ink, Padding = new Padding(20, 12, 0, 0) };
+            var duration = TimeSpan.FromMilliseconds(Math.Max(0, session.end - session.start));
+            var summary = new Label { Dock = DockStyle.Top, Height = 64, Text =
+                DateTimeOffset.FromUnixTimeMilliseconds(session.start).LocalDateTime.ToString("yyyy-MM-dd HH:mm") + "  →  " +
+                DateTimeOffset.FromUnixTimeMilliseconds(session.end).LocalDateTime.ToString("HH:mm") +
+                "    游玩 " + (int)duration.TotalHours + " 小时 " + duration.Minutes + " 分钟", Padding = new Padding(24, 10, 0, 0), ForeColor = Ink };
+            Curves = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 249, 255), Padding = new Padding(16) };
+            Curves.Paint += PaintCurves;
+            var close = MakeButton("关闭"); close.Dock = DockStyle.Bottom; close.Height = 42; close.Click += delegate { Close(); };
+            var history = MakeButton("查看历史游戏记录"); history.Dock = DockStyle.Bottom; history.Height = 42;
+            history.Click += delegate { using (var dialog = new NativeRecordsDialog()) dialog.ShowDialog(this); };
+            Controls.Add(Curves); Controls.Add(close); Controls.Add(history); Controls.Add(summary); Controls.Add(title);
+        }
+
+        private void PaintCurves(object sender, PaintEventArgs e)
+        {
+            var samples = (Session.samples ?? new GameMetricSample[0]).Where(s => s != null).OrderBy(s => s.utc).ToArray();
+            if (samples.Length == 0)
+            {
+                using (var brush = new SolidBrush(Ink)) e.Graphics.DrawString("这条记录没有硬件采样。更新前的历史游戏仅显示时长。", Font, brush, 24, 28);
+                return;
+            }
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int left = 145, right = Curves.Width - 28, top = 12;
+            int rowHeight = Math.Max(78, (Curves.Height - 35) / 4);
+            for (int metric = 0; metric < 4; metric++)
+            {
+                int y0 = top + metric * rowHeight, bottom = y0 + rowHeight - 24;
+                if (bottom <= y0 || right <= left) continue;
+                Func<GameMetricSample, double> value = metric == 0 ? (Func<GameMetricSample, double>)(s => s.cpu) : metric == 1 ? (Func<GameMetricSample, double>)(s => s.gpu) : metric == 2 ? (Func<GameMetricSample, double>)(s => s.cpuTemp) : (Func<GameMetricSample, double>)(s => s.gpuTemp);
+                var valid = samples.Where(s => value(s) >= 0).ToArray();
+                double maximum = valid.Length == 0 ? 100 : Math.Max(metric < 2 ? 100 : 90, valid.Max(value) + 5);
+                string numbers = valid.Length == 0 ? "暂无读数" : "均值 " + Math.Round(valid.Average(value)) + (metric < 2 ? "%" : "°C") + "  /  峰值 " + Math.Round(valid.Max(value)) + (metric < 2 ? "%" : "°C");
+                using (var ink = new SolidBrush(Ink))
+                {
+                    e.Graphics.DrawString(Names[metric], Font, ink, 18, y0 + 7);
+                    e.Graphics.DrawString(numbers, Font, ink, 18, y0 + 31);
+                }
+                using (var grid = new Pen(Color.FromArgb(223, 207, 234)))
+                {
+                    e.Graphics.DrawLine(grid, left, bottom, right, bottom);
+                    e.Graphics.DrawLine(grid, left, y0 + 5, right, y0 + 5);
+                }
+                if (valid.Length < 2) continue;
+                long span = Math.Max(1, Session.end - Session.start);
+                using (var pen = new Pen(Colors[metric], 2.5F))
+                {
+                    Point? previous = null;
+                    foreach (var sample in samples)
+                    {
+                        double v = value(sample);
+                        if (v < 0) { previous = null; continue; }
+                        int x = left + (int)((right - left) * Math.Max(0, Math.Min(1, (sample.utc - Session.start) / (double)span)));
+                        int y = bottom - (int)((bottom - y0 - 5) * Math.Max(0, Math.Min(1, v / maximum)));
+                        var point = new Point(x, y);
+                        if (previous.HasValue) e.Graphics.DrawLine(pen, previous.Value, point);
+                        previous = point;
+                    }
+                }
+            }
+        }
     }
 
     internal sealed class NativeSessionEditDialog : NativeDialog
@@ -272,3 +352,4 @@ namespace NixLanConsole
         }
     }
 }
+

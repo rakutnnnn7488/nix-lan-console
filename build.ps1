@@ -13,6 +13,11 @@ Copy-Item (Join-Path $PSScriptRoot 'ApplyUpdate.ps1'),(Join-Path $PSScriptRoot '
 if ($GameAssetsDir) {
     $assetNames = @('bg_stream_native.png','haisin.png','sidebar_noon.png','sidebar_evening.png','sidebar_night.png','window_active.png','window_inactive.png','button_minimize.png','button_maximize.png','button_close.png','button_start.png','start_pressed.png','jine_bg.png','icon_jine_ame.png','tail.png','zpix.ttf','icon_desktop_youtube.png','icon_desktop_asobu.png','icon_desktop_neru.png','icon_desktop_okusuri.png','icon_desktop_internet.png','icon_desktop_odekake.png','icon_status_follower.png','icon_status_stress.png','icon_status_love.png','icon_status_yami.png')
     if (Test-Path -LiteralPath (Join-Path $GameAssetsDir 'desktop_wallpaper.png') -PathType Leaf) { $assetNames += 'desktop_wallpaper.png' }
+    if (Test-Path -LiteralPath (Join-Path $GameAssetsDir 'desktop_full_original.png') -PathType Leaf) { $assetNames += 'desktop_full_original.png' }
+    if (Test-Path -LiteralPath (Join-Path $GameAssetsDir 'footer_original.png') -PathType Leaf) { $assetNames += 'footer_original.png' }
+    foreach ($font in @('PixelMplus10-Regular.ttf','DinkieBitmap-7px.ttf','DinkieBitmap-9px.ttf')) {
+        if (Test-Path -LiteralPath (Join-Path $GameAssetsDir $font) -PathType Leaf) { $assetNames += $font }
+    }
     $assetTarget = Join-Path $OutputDir 'game-assets'
     New-Item -ItemType Directory -Path $assetTarget -Force | Out-Null
     foreach ($name in $assetNames) {
