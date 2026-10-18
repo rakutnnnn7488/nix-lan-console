@@ -56,6 +56,7 @@ namespace NixLanConsole
         private Image SideBackground;
         private Image DesktopBackground;
         private Image DesktopFullBackground;
+        private Bitmap DesktopPaintCache;
         private Image TaskbarBackground;
         private readonly Dictionary<string, Image> DesktopIcons = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
         private readonly List<Control> ShortcutControls = new List<Control>();
@@ -149,8 +150,8 @@ namespace NixLanConsole
             var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = new Padding(0), Padding = new Padding(9, 6, 9, 7), BackColor = Color.FromArgb(250, 242, 251) };
             metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             metrics.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-            for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 20));
-            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 20));
+            for (int i = 0; i < 4; i++) metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 16));
+            metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 36));
             HostState = new Label { Text = "主机离线", Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(82, 79, 153), BackColor = Color.FromArgb(224, 211, 242), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) }; metrics.Controls.Add(HostState, 0, 0);
             string[] metricNames = { "CPU", "内存", "GPU", "温度" };
             for (int i = 0; i < metricNames.Length; i++)
@@ -290,6 +291,7 @@ namespace NixLanConsole
                 if (SideBackground != null) SideBackground.Dispose();
                 if (DesktopBackground != null) DesktopBackground.Dispose();
                 if (DesktopFullBackground != null) DesktopFullBackground.Dispose();
+                if (DesktopPaintCache != null) DesktopPaintCache.Dispose();
                 if (TaskbarBackground != null) TaskbarBackground.Dispose();
                 foreach (var image in DesktopIcons.Values) image.Dispose();
                 if (WindowFrame != null) WindowFrame.Dispose();
@@ -424,8 +426,9 @@ namespace NixLanConsole
             card.MouseMove += delegate(object sender, MouseEventArgs e)
             {
                 if (!moving) return;
-                card.Left = Math.Max(0, Math.Min(Desktop.Width - card.Width, card.Left + e.X - origin.X));
-                card.Top = Math.Max(0, Math.Min(Desktop.Height - card.Height, card.Top + e.Y - origin.Y));
+                Point next = new Point(Math.Max(0, Math.Min(Desktop.Width - card.Width, card.Left + e.X - origin.X)),
+                    Math.Max(0, Math.Min(Desktop.Height - card.Height, card.Top + e.Y - origin.Y)));
+                if (next != card.Location) card.Location = next;
             };
             card.MouseUp += delegate { if (moving) { moving = false; card.Capture = false; RememberPosition(card); SaveLayout(); } };
             return card;
@@ -459,7 +462,7 @@ namespace NixLanConsole
             double scale = Math.Min(Desktop.Width / 1436.0, Desktop.Height / 1038.0);
             for (int i = 0; i < ShortcutControls.Count; i++) ShortcutControls[i].Bounds = ScaleRect(50, 55 + i * 120, 88, 98, scale);
             CharacterCard.Bounds = ScaleRect(174, 62, 716, 508, scale);
-            StatsCard.Bounds = ScaleRect(1038, 22, 392, 353, scale);
+            StatsCard.Bounds = ScaleRect(1038, 22, 392, 405, scale);
             RecordsCard.Bounds = ScaleRect(815, 447, 615, 575, scale);
             LiveCard.Bounds = ScaleRect(50, 50, 1336, 940, scale);
             TransitionOverlay.Bounds = Desktop.ClientRectangle;
@@ -497,28 +500,41 @@ namespace NixLanConsole
         }
         private void PaintDesktop(object sender, PaintEventArgs e)
         {
-            e.Graphics.Clear(Color.FromArgb(250, 235, 250));
+            if (DesktopPaintCache == null || DesktopPaintCache.Size != Desktop.ClientSize) RebuildDesktopPaintCache();
+            if (DesktopPaintCache == null) return;
+            Rectangle clip = Rectangle.Intersect(e.ClipRectangle, Desktop.ClientRectangle);
+            if (!clip.IsEmpty) e.Graphics.DrawImage(DesktopPaintCache, clip, clip, GraphicsUnit.Pixel);
+        }
+        private void RebuildDesktopPaintCache()
+        {
+            if (DesktopPaintCache != null) { DesktopPaintCache.Dispose(); DesktopPaintCache = null; }
+            if (Desktop.Width < 1 || Desktop.Height < 1) return;
+            DesktopPaintCache = new Bitmap(Desktop.Width, Desktop.Height);
+            using (Graphics graphics = Graphics.FromImage(DesktopPaintCache))
+            {
+                graphics.Clear(Color.FromArgb(250, 235, 250));
             if (DesktopFullBackground != null)
             {
                 // FHDbg contains the full 1920px scene. This panel represents the
                 // 1436px center between the two 242px side rails.
-                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-                e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
                 var source = new Rectangle(242, 0, 1436, 1033);
-                e.Graphics.DrawImage(DesktopFullBackground, Desktop.ClientRectangle, source, GraphicsUnit.Pixel);
+                graphics.DrawImage(DesktopFullBackground, Desktop.ClientRectangle, source, GraphicsUnit.Pixel);
             }
             else if (DesktopBackground != null)
             {
                 using (var brush = new TextureBrush(DesktopBackground, System.Drawing.Drawing2D.WrapMode.Tile))
                 {
                     brush.TranslateTransform(26, 24);
-                    e.Graphics.FillRectangle(brush, Desktop.ClientRectangle);
+                    graphics.FillRectangle(brush, Desktop.ClientRectangle);
                 }
             }
             else using (var brush = new SolidBrush(Color.FromArgb(220, 230, 245)))
                 for (int y = 12; y < Desktop.Height; y += 32)
                     for (int x = 12 + (y / 32 % 2) * 16; x < Desktop.Width; x += 32)
-                        e.Graphics.FillRectangle(brush, x, y, 7, 7);
+                        graphics.FillRectangle(brush, x, y, 7, 7);
+            }
         }
         private static Rectangle ScaleRect(int x, int y, int width, int height, double scale)
         {
@@ -528,7 +544,7 @@ namespace NixLanConsole
         private void RefreshData()
         {
             DashboardState state = DisplayServer.Snapshot();
-            HostState.Text = state.online ? "● 主机在线  /  " + state.host : "○ 主机离线";
+            HostState.Text = state.online ? "主机在线  /  " + state.host : "主机离线";
             TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (state.role == "kangel" ? "超天酱" : "糖糖");
             MetricValues[0].Text = state.online && state.cpu >= 0 ? Math.Round(state.cpu) + "%" : "—";
             MetricValues[1].Text = state.online && state.memoryTotal > 0 ? Math.Round(state.memoryUsed / state.memoryTotal * 100) + "%" : "—";
@@ -658,7 +674,8 @@ namespace NixLanConsole
                         ManagerText = new Font(family, 18, FontStyle.Regular, GraphicsUnit.Pixel);
                         ManagerSmallText = new Font(family, 16, FontStyle.Regular, GraphicsUnit.Pixel);
                         ManagerTinyText = new Font(family, 12, FontStyle.Regular, GraphicsUnit.Pixel);
-                        HostState.Font = ManagerText;
+                        // PixelMplus10 is used for metric labels. Zpix renders the
+                        // Chinese host status consistently with the rest of the UI.
                         foreach (var name in MetricNames) name.Font = name.Parent.Height < 40 ? ManagerTinyText : ManagerSmallText;
                     }
                     if (File.Exists(liveFontPath))
@@ -673,6 +690,7 @@ namespace NixLanConsole
                 if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png"));
                 if (File.Exists(Path.Combine(assets, "desktop_wallpaper.png"))) DesktopBackground = LoadDetachedImage(Path.Combine(assets, "desktop_wallpaper.png"));
                 if (File.Exists(Path.Combine(assets, "desktop_full_original.png"))) DesktopFullBackground = LoadDetachedImage(Path.Combine(assets, "desktop_full_original.png"));
+                RebuildDesktopPaintCache();
                 if (File.Exists(Path.Combine(assets, "footer_original.png"))) TaskbarBackground = LoadDetachedImage(Path.Combine(assets, "footer_original.png"));
                 foreach (string name in new[] { "icon_desktop_youtube.png", "icon_desktop_asobu.png", "icon_desktop_neru.png", "icon_desktop_okusuri.png", "icon_desktop_internet.png", "icon_desktop_odekake.png" })
                     if (File.Exists(Path.Combine(assets, name))) DesktopIcons[name] = LoadDetachedImage(Path.Combine(assets, name));
@@ -928,3 +946,4 @@ namespace NixLanConsole
         private void EndDrag(object sender, MouseEventArgs e) { Dragging = false; }
     }
 }
+
