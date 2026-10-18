@@ -271,7 +271,7 @@ namespace NixLanConsole
         {
             string exe = Path.GetFileNameWithoutExtension(path);
             return String.Equals(title, "Wallpaper Engine", StringComparison.OrdinalIgnoreCase) ||
-                Regex.IsMatch(exe, @"wallpaper|launcher|updat|patch|crash|report|unins|setup|install|anticheat|easyanticheat|battleye|cef|webengine|platformprocess|unitycrashhandler|bootstrap|redistributable|dedicatedserver", RegexOptions.IgnoreCase);
+                Regex.IsMatch(exe, @"wallpaper|launcher|updat|patch|crash|report|unins|setup|install|anticheat|easyanticheat|battleye|cef|webengine|webhelper|platformprocess|unitycrashhandler|bootstrap|redistributable|dedicatedserver|cleanup|touchup|vconsole|createdump", RegexOptions.IgnoreCase);
         }
         private static string[] GetGameCatalog()
         {
@@ -373,9 +373,9 @@ namespace NixLanConsole
                         string dir = Path.Combine(root, dm.Groups[1].Value); if (!Directory.Exists(dir)) continue;
                         foreach (string exe in Directory.GetFiles(dir, "*.exe", SearchOption.AllDirectories))
                         {
-                            string lower = exe.ToLowerInvariant(); if (lower.Contains("\\redist\\") || lower.Contains("\\_commonredist\\") || lower.Contains("\\easyanticheat\\") || lower.Contains("\\battleye\\") || lower.Contains("\\anticheat\\") || lower.Contains("\\tools\\")) continue;
+                            string lower = exe.ToLowerInvariant(); if (lower.Contains("\\redist\\") || lower.Contains("\\_commonredist\\") || lower.Contains("\\__installer\\") || lower.Contains("\\engine\\binaries\\") || lower.Contains("\\easyanticheat\\") || lower.Contains("\\battleye\\") || lower.Contains("\\anticheat\\") || lower.Contains("\\tools\\")) continue;
                             string proc = Path.GetFileNameWithoutExtension(exe); if (proc.Length < 3 || IsSystemUtility(exe, im.Groups[1].Value)) continue;
-                            GameExecutables[Path.GetFullPath(exe)] = im.Groups[1].Value;
+                            GameExecutables[Path.GetFullPath(exe)] = im.Groups[1].Value.Trim();
                         }
                     }
                 }
@@ -453,7 +453,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.2.2"; }
+    internal static class BuildInfo { public const string Version = "1.6.2.3"; }
 
     internal static class DisplayServer
     {
