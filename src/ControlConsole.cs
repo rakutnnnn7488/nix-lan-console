@@ -453,7 +453,7 @@ namespace NixLanConsole
         public bool hostAutoUpdate;
     }
 
-    internal static class BuildInfo { public const string Version = "1.6.2.1"; }
+    internal static class BuildInfo { public const string Version = "1.6.2.2"; }
 
     internal static class DisplayServer
     {
@@ -689,18 +689,33 @@ namespace NixLanConsole
         }
         private static string LatestReleaseVersionFromWeb(string repository)
         {
-            var request = (HttpWebRequest)WebRequest.Create("https://github.com/" + repository + "/releases/latest");
-            request.UserAgent = "NixLanConsole/" + BuildInfo.Version;
-            request.AllowAutoRedirect = false;
-            request.Timeout = 8000;
-            using (var response = (HttpWebResponse)request.GetResponse())
+            try
             {
-                string location = response.Headers[HttpResponseHeader.Location];
-                Uri target;
-                if (String.IsNullOrWhiteSpace(location) || !Uri.TryCreate(new Uri("https://github.com"), location, out target) || target.Host != "github.com") throw new InvalidDataException("GitHub 最新版本跳转地址无效。");
-                Match match = Regex.Match(target.AbsolutePath, @"/releases/tag/v(\d+\.\d+\.\d+\.\d+)\z", RegexOptions.IgnoreCase);
-                if (!match.Success) throw new InvalidDataException("GitHub 最新版本号无效。");
-                return match.Groups[1].Value;
+                var request = (HttpWebRequest)WebRequest.Create("https://github.com/" + repository + "/releases/latest");
+                request.UserAgent = "NixLanConsole/" + BuildInfo.Version;
+                request.AllowAutoRedirect = false;
+                request.Timeout = 8000;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                {
+                    string location = response.Headers[HttpResponseHeader.Location];
+                    Uri target;
+                    if (String.IsNullOrWhiteSpace(location) || !Uri.TryCreate(new Uri("https://github.com"), location, out target) || target.Host != "github.com") throw new InvalidDataException("GitHub 最新版本跳转地址无效。");
+                    Match match = Regex.Match(target.AbsolutePath, @"/releases/tag/v(\d+\.\d+\.\d+\.\d+)\z", RegexOptions.IgnoreCase);
+                    if (!match.Success) throw new InvalidDataException("GitHub 最新版本号无效。");
+                    return match.Groups[1].Value;
+                }
+            }
+            catch (Exception ex)
+            {
+                StartupDiagnostics.Write("GitHub release page unavailable; trying raw version: " + ex.Message);
+                using (var client = new WebClient())
+                {
+                    client.Headers[HttpRequestHeader.UserAgent] = "NixLanConsole/" + BuildInfo.Version;
+                    string version = client.DownloadString("https://raw.githubusercontent.com/" + repository + "/main/version.txt").Trim().TrimStart('\uFEFF');
+                    Version parsed;
+                    if (!Regex.IsMatch(version, @"\A\d+\.\d+\.\d+\.\d+\z") || !Version.TryParse(version, out parsed)) throw new InvalidDataException("GitHub 版本文件无效。");
+                    return version;
+                }
             }
         }
         private static bool ReadPackageVersion(string file, out Version version)
