@@ -735,7 +735,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.7.4.1";
+        public const string Version = "1.7.4.2";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -774,6 +774,7 @@ namespace NixLanConsole
         private static TrayContext Tray;
         private static System.Threading.Timer UpdateTimer;
         private static int UpdateStarted;
+        private static int LegacyFoliaMigrationStarted;
         private static readonly object UpdateProgressGate = new object();
         private static string UpdateProgressState = "idle";
         private static string UpdateProgressMessage = "定时检查 GitHub 最新版本。";
@@ -808,7 +809,6 @@ namespace NixLanConsole
         public static void Run()
         {
             Directory.CreateDirectory(DataDir); LoadSettings(); LoadSessions();
-            LegacyFoliaDisplayMigration.Run();
             UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(30));
             Tray = new TrayContext();
             var tcpThread = new Thread(ReadTcp) { IsBackground = true }; tcpThread.Start();
@@ -1220,6 +1220,8 @@ namespace NixLanConsole
         }
         private static void Update(MetricPacket p)
         {
+            if (!String.IsNullOrWhiteSpace(p.foliaKey) && Interlocked.Exchange(ref LegacyFoliaMigrationStarted, 1) == 0)
+                ThreadPool.QueueUserWorkItem(delegate { LegacyFoliaDisplayMigration.Run(); });
             bool openForNewHost = ShouldOpenForHost(Last, p, DateTime.UtcNow - LastSeen);
             Last = p; LastSeen = DateTime.UtcNow;
             foreach (string name in p.catalog ?? new string[0]) if (!String.IsNullOrWhiteSpace(name)) KnownGames.Add(name);
