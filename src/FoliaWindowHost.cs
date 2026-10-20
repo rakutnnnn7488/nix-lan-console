@@ -27,6 +27,10 @@ namespace NixLanConsole
         private bool HasOriginalBounds;
         private DateTime LaunchStarted;
         private Size LastSize;
+        // Edge draws its app title strip inside the client area even after WS_CAPTION is removed.
+        // Place that strip above the clipping surface so only the Folia page is visible.
+        private int LastTitleCrop = -1;
+        private const int EdgeTitlePixelsAt96Dpi = 40;
 
         private const int GwlStyle = -16;
         private const long WsChild = 0x40000000L;
@@ -192,6 +196,7 @@ namespace NixLanConsole
             }
             EmbeddedWindow = window;
             LastSize = Size.Empty;
+            LastTitleCrop = -1;
             Placeholder.Visible = false;
             ResizeEmbeddedWindow();
             PollTimer.Stop();
@@ -201,9 +206,11 @@ namespace NixLanConsole
         {
             if (EmbeddedWindow == IntPtr.Zero || !IsWindow(EmbeddedWindow) || Surface.IsDisposed || !Surface.IsHandleCreated) return;
             Size size = new Size(Math.Max(1, Surface.ClientSize.Width), Math.Max(1, Surface.ClientSize.Height));
-            if (size == LastSize) return;
+            int titleCrop = Math.Max(1, (int)Math.Round(EdgeTitlePixelsAt96Dpi * Surface.DeviceDpi / 96.0));
+            if (size == LastSize && titleCrop == LastTitleCrop) return;
             LastSize = size;
-            SetWindowPos(EmbeddedWindow, IntPtr.Zero, 0, 0, size.Width, size.Height, SwpNoZOrder | SwpFrameChanged | SwpShowWindow);
+            LastTitleCrop = titleCrop;
+            SetWindowPos(EmbeddedWindow, IntPtr.Zero, 0, -titleCrop, size.Width, size.Height + titleCrop, SwpNoZOrder | SwpFrameChanged | SwpShowWindow);
         }
 
         public void Close()
@@ -226,6 +233,7 @@ namespace NixLanConsole
             }
             HasOriginalStyle = HasOriginalBounds = false;
             LastSize = Size.Empty;
+            LastTitleCrop = -1;
             CurrentUrl = null;
             if (StartedProcess != null)
             {

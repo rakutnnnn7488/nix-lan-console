@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.7.4.2**，含 Folia 主机转发与副机歌词动效窗口；源码版本不代表远端已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.7.4.3**，含 Folia 主机转发与副机歌词动效窗口；源码版本不代表远端已发布该版本。
 
 ## 安装布局
 
@@ -43,6 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 副机显示主机 CPU、内存、GPU、可读取的温度、最近一分钟曲线，以及按游戏进程记录的时长。主机地址变化后应更新副机设置。
 - Folia 安装在**主机**。主机程序读取 Folia 自带的 OBS 浏览器源，并通过现有 TCP 46702 端口转发歌词动效；副机程序在可拖动的游戏风格窗口中显示原版动效。主机开始播放时自动打开，暂停时保留画面，完全退出 Folia 后约 10 秒关闭。副机无需安装 Folia、运行旧局域网脚本或填写播放器路径。
 - 主机 Folia 的设置中需启用“OBS 浏览器源”；当前版本不会改动 Folia 的配置。副机显示使用系统 Microsoft Edge 的渲染进程，但没有单独的浏览器窗口。
+- Folia 卡片仅显示控制台的游戏风格标题栏；Edge 应用模式自绘的“Folia OBS”标题条会从卡片可见区域裁掉。
 - 副机收到新版主机的 Folia 转发状态后，才会停用旧 `FoliaAutoDisplay` 全屏监听器，以免主机尚未更新时歌词中断；原启动快捷方式备份到 `%LOCALAPPDATA%\NixLanConsole\FoliaAutoDisplay-startup.backup.lnk`，旧工具文件保留。
 - 程序数据保存在 `%LOCALAPPDATA%\NixLanConsole`。升级前请先从托盘退出旧进程。
 
