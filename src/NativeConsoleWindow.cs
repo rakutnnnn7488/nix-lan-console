@@ -43,6 +43,9 @@ namespace NixLanConsole
         private readonly Panel RecordsCard;
         private readonly Panel LiveCard;
         private readonly Panel LiveCanvas;
+        private readonly Panel FoliaCard;
+        private readonly Panel FoliaSurface;
+        private readonly FoliaWindowHost FoliaHost;
         private readonly Panel TransitionOverlay;
         private readonly Timer RefreshTimer;
         private readonly Timer AnimationTimer;
@@ -139,6 +142,7 @@ namespace NixLanConsole
             AddDesktopIcon("吃药", "icon_desktop_okusuri.png", 50, 415, delegate { FocusCard(StatsCard); });
             AddDesktopIcon("因特网", "icon_desktop_internet.png", 50, 535, delegate { OpenSettings(); });
             AddDesktopIcon("出门", "icon_desktop_odekake.png", 50, 655, delegate { Hide(); });
+            AddDesktopIcon("Folia", "", 50, 775, delegate { OpenFolia(); });
 
             CharacterCard = Card("Webcam", 716);
             CharacterState = new Label { Text = "糖糖 · 日常待机 ♡" };
@@ -208,6 +212,10 @@ namespace NixLanConsole
             LiveCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 248, 255) };
             LiveCanvas.Paint += PaintLive;
             LiveCard.Controls.Add(LiveCanvas); LiveCard.Visible = false; Desktop.Controls.Add(LiveCard);
+            FoliaCard = Card("Folia 音乐", 1000);
+            FoliaSurface = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(27, 20, 43) };
+            FoliaCard.Controls.Add(FoliaSurface); FoliaCard.Visible = false; Desktop.Controls.Add(FoliaCard);
+            FoliaHost = new FoliaWindowHost(FoliaSurface);
             TransitionOverlay = new BufferedPanel { BackColor = Color.FromArgb(250, 235, 250), Visible = false };
             TransitionOverlay.Paint += PaintTransformation;
             Desktop.Controls.Add(TransitionOverlay);
@@ -268,7 +276,6 @@ namespace NixLanConsole
 
             RefreshTimer = new Timer { Interval = 1000 };
             RefreshTimer.Tick += delegate { RefreshData(); };
-            RefreshTimer.Start();
             LoadRoleAssets();
             AnimationTimer = new Timer { Interval = 83 };
             AnimationTimer.Tick += delegate
@@ -283,10 +290,13 @@ namespace NixLanConsole
                 }
                 else if (LiveCard.Visible) LiveCanvas.Invalidate();
             };
-            AnimationTimer.Start();
+            VisibleChanged += delegate { UpdateUiTimers(); };
+            Shown += delegate { UpdateUiTimers(); };
+            Resize += delegate { UpdateUiTimers(); };
             FormClosed += delegate
             {
                 RefreshTimer.Stop(); AnimationTimer.Stop();
+                FoliaHost.Dispose();
                 if (CharacterBackground != null) CharacterBackground.Dispose();
                 if (SideBackground != null) SideBackground.Dispose();
                 if (DesktopBackground != null) DesktopBackground.Dispose();
@@ -323,6 +333,19 @@ namespace NixLanConsole
             RefreshData();
         }
 
+        private void UpdateUiTimers()
+        {
+            bool active = Visible && WindowState != FormWindowState.Minimized;
+            if (!active)
+            {
+                RefreshTimer.Stop();
+                AnimationTimer.Stop();
+                return;
+            }
+            if (!RefreshTimer.Enabled) { RefreshData(); RefreshTimer.Start(); }
+            if (!AnimationTimer.Enabled) { CharacterCanvas.Invalidate(); AnimationTimer.Start(); }
+        }
+
         private static Button WindowButton(string text)
         {
             return new Button { Text = text, Width = 32, Height = 28, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(248, 238, 250), ForeColor = Color.FromArgb(65, 51, 142), Font = new Font("Consolas", 12F, FontStyle.Bold), Margin = new Padding(2) };
@@ -330,12 +353,30 @@ namespace NixLanConsole
 
         private void OpenSettings() { using (var dialog = new NativeSettingsDialog()) dialog.ShowDialog(this); }
 
+        private void OpenFolia()
+        {
+            string executable = DisplayServer.GetFoliaExecutablePath();
+            if (String.IsNullOrWhiteSpace(executable))
+            {
+                MessageBox.Show(this, "请先在「开始 → 设置 → Folia」中选择 Folia.exe 并保存。", "Folia 尚未配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                OpenSettings();
+                executable = DisplayServer.GetFoliaExecutablePath();
+                if (String.IsNullOrWhiteSpace(executable)) return;
+            }
+            try
+            {
+                FocusCard(FoliaCard);
+                FoliaHost.Launch(executable);
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "无法打开 Folia", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+
         private void FocusCard(Panel card)
         {
             ActiveCard = card;
             card.Visible = true;
             card.BringToFront();
-            foreach (var window in new[] { CharacterCard, StatsCard, RecordsCard }) if (window != null) window.Invalidate();
+            foreach (var window in new[] { CharacterCard, StatsCard, RecordsCard, FoliaCard }) if (window != null) window.Invalidate();
         }
 
         private void AddDesktopIcon(string label, string assetName, int x, int y, Action action)
@@ -465,8 +506,9 @@ namespace NixLanConsole
             StatsCard.Bounds = ScaleRect(1038, 22, 392, 405, scale);
             RecordsCard.Bounds = ScaleRect(815, 447, 615, 575, scale);
             LiveCard.Bounds = ScaleRect(50, 50, 1336, 940, scale);
+            FoliaCard.Bounds = ScaleRect(250, 165, 1000, 700, scale);
             TransitionOverlay.Bounds = Desktop.ClientRectangle;
-            foreach (var card in new[] { CharacterCard, StatsCard, RecordsCard })
+            foreach (var card in new[] { CharacterCard, StatsCard, RecordsCard, FoliaCard })
             {
                 double[] position;
                 if (SavedPositions.TryGetValue(card.Name, out position)) card.Location = new Point((int)(position[0] * Math.Max(0, Desktop.Width - card.Width)), (int)(position[1] * Math.Max(0, Desktop.Height - card.Height)));
@@ -946,4 +988,3 @@ namespace NixLanConsole
         private void EndDrag(object sender, MouseEventArgs e) { Dragging = false; }
     }
 }
-

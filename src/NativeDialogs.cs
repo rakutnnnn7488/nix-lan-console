@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Text;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -281,6 +282,7 @@ namespace NixLanConsole
         private readonly CheckBox AutoUpdate;
         private readonly CheckBox HostAutoUpdate;
         private readonly TextBox HostAddress;
+        private readonly TextBox FoliaExecutable;
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
         private readonly Button InstallButton;
@@ -307,7 +309,7 @@ namespace NixLanConsole
             var versionLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(18) };
             versionLayout.Controls.Add(new Label { Text = "副机版本：" + State.version + "\r\n主机版本：" + (State.online ? State.hostVersion : "主机离线"), Width = 620, Height = 65, Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) });
             AutoUpdate = new CheckBox { Text = "副机自动更新", Checked = State.autoUpdate, Width = 600, Height = 38 };
-            HostAutoUpdate = new CheckBox { Text = "主机自动更新（游戏运行时暂缓）", Checked = State.hostAutoUpdate, Width = 600, Height = 38 };
+            HostAutoUpdate = new CheckBox { Text = "允许主机自动更新（远程；主机设置页也可关闭）", Checked = State.hostAutoUpdate, Width = 600, Height = 38 };
             versionLayout.Controls.Add(AutoUpdate); versionLayout.Controls.Add(HostAutoUpdate);
             versionLayout.Controls.Add(new Label { Text = "主机 IPv4 地址（当前主机：" + (State.hostAddress ?? "192.168.1.7") + "）", Width = 600, Height = 25, Padding = new Padding(0, 5, 0, 0) });
             HostAddress = new TextBox { Text = State.hostAddress ?? "192.168.1.7", Width = 300, Height = 28 };
@@ -321,7 +323,39 @@ namespace NixLanConsole
             UpdateProgress = new ProgressBar { Width = 600, Height = 24, Style = ProgressBarStyle.Continuous }; versionLayout.Controls.Add(UpdateProgress);
             UpdateMessage = new Label { Text = "", Width = 620, Height = 80 }; versionLayout.Controls.Add(UpdateMessage);
             versionTab.Controls.Add(versionLayout);
-            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); Controls.Add(tabs);
+
+            var foliaTab = new TabPage("Folia");
+            var foliaLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20) };
+            foliaLayout.Controls.Add(new Label
+            {
+                Text = "把 Folia 播放器嵌入桌面中的可拖动窗口。点击桌面「Folia」图标时，控制台会启动播放器并将其窗口放入 Folia 卡片。",
+                Width = 690, Height = 58, AutoSize = false
+            });
+            foliaLayout.Controls.Add(new Label { Text = "Folia.exe 路径：", Width = 650, Height = 24, Padding = new Padding(0, 5, 0, 0) });
+            var foliaPathRow = new FlowLayoutPanel { Width = 700, Height = 38, WrapContents = false, Margin = new Padding(0, 0, 0, 10) };
+            string savedFoliaPath = DisplayServer.GetFoliaExecutablePath();
+            if (String.IsNullOrWhiteSpace(savedFoliaPath) && File.Exists(@"D:\folia\Folia.exe")) savedFoliaPath = @"D:\folia\Folia.exe";
+            FoliaExecutable = new TextBox { Text = savedFoliaPath, Width = 520, Height = 28 };
+            var browseFolia = MakeButton("浏览…");
+            browseFolia.Click += delegate
+            {
+                using (var picker = new OpenFileDialog { Filter = "Folia 播放器 (Folia.exe)|Folia.exe|Windows 程序 (*.exe)|*.exe", Title = "选择 Folia.exe", CheckFileExists = true })
+                {
+                    if (!String.IsNullOrWhiteSpace(FoliaExecutable.Text) && File.Exists(FoliaExecutable.Text)) picker.FileName = FoliaExecutable.Text;
+                    if (picker.ShowDialog(this) == DialogResult.OK) FoliaExecutable.Text = picker.FileName;
+                }
+            };
+            foliaPathRow.Controls.Add(FoliaExecutable); foliaPathRow.Controls.Add(browseFolia); foliaLayout.Controls.Add(foliaPathRow);
+            foliaLayout.Controls.Add(new Label
+            {
+                Text = "点击保存后，桌面会出现可拖动的 Folia 窗口入口。播放、歌词和视觉效果仍由本机 Folia 播放器负责。关闭控制台时会把播放器窗口还原为普通窗口。",
+                Width = 690, Height = 66, AutoSize = false
+            });
+            var saveFolia = MakeButton("保存 Folia 设置"); saveFolia.Click += delegate { SaveGames(); };
+            foliaLayout.Controls.Add(saveFolia);
+            foliaTab.Controls.Add(foliaLayout);
+
+            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); Controls.Add(tabs);
             RefreshTimer = new System.Windows.Forms.Timer { Interval = 500 }; RefreshTimer.Tick += delegate { RefreshProgress(); }; RefreshTimer.Start();
             FormClosed += delegate { RefreshTimer.Stop(); RefreshTimer.Dispose(); };
             RefreshProgress();
@@ -330,7 +364,7 @@ namespace NixLanConsole
         {
             var excluded = new List<string>();
             foreach (object item in Games.Items) if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
-            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
+            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text, FoliaExecutable.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         private void PurgeSelected()
@@ -351,6 +385,173 @@ namespace NixLanConsole
             InstallButton.Enabled = progress.state == "available";
         }
     }
-}
 
+    internal sealed class NativeHostSettingsDialog : NativeDialog
+    {
+        private readonly CheckBox AutoUpdate;
+        private readonly CheckBox StartWithWindows;
+        private readonly CheckedListBox Games;
+        private readonly Label Status;
+        private readonly Label UpdateMessage;
+        private readonly ProgressBar UpdateProgress;
+        private readonly Button InstallButton;
+        private readonly System.Windows.Forms.Timer RefreshTimer;
+        private HostSettingsState State;
+
+        public NativeHostSettingsDialog() : base("主机设置", 780, 640)
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+            State = HostSensor.GetSettingsState();
+
+            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(18, 8) };
+
+            var general = new TabPage("常规") { BackColor = Color.FromArgb(248, 235, 250) };
+            var generalLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(18), AutoScroll = true };
+            generalLayout.Controls.Add(new Label { Text = "主机名：" + State.machine + "    版本：" + State.version + "    TCP 端口：46702", Width = 700, Height = 30, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold) });
+            AutoUpdate = new CheckBox { Text = "允许主机自动更新（游戏运行时暂缓）", Checked = State.autoUpdate, Width = 680, Height = 34 };
+            StartWithWindows = new CheckBox { Text = "登录 Windows 时自动启动主机监控", Checked = State.startWithWindows, Width = 680, Height = 34 };
+            generalLayout.Controls.Add(AutoUpdate);
+            generalLayout.Controls.Add(StartWithWindows);
+            generalLayout.Controls.Add(new Label { Text = "副机的设置页也可远程关闭自动更新；两边都开启时才会自动检查。", Width = 680, Height = 26, ForeColor = Color.FromArgb(90, 80, 130) });
+            var generalButtons = new FlowLayoutPanel { Width = 700, Height = 46, FlowDirection = FlowDirection.LeftToRight };
+            var saveGeneral = MakeButton("保存常规设置"); saveGeneral.Click += delegate { SaveGeneral(); };
+            var firewall = MakeButton("开放防火墙端口…"); firewall.Click += delegate { OpenFirewall(); };
+            generalButtons.Controls.Add(saveGeneral); generalButtons.Controls.Add(firewall);
+            generalLayout.Controls.Add(generalButtons);
+            Status = new Label { Text = "", AutoSize = true, MaximumSize = new Size(700, 0), ForeColor = Ink, Font = this.Font };
+            generalLayout.Controls.Add(Status);
+            general.Controls.Add(generalLayout);
+
+            var gamesPage = new TabPage("游戏追踪") { BackColor = Color.FromArgb(248, 235, 250) };
+            var gamesTop = new Label { Text = "勾选要记录的游戏；未勾选的不会发送到副机。Wallpaper Engine 始终排除。", Dock = DockStyle.Top, Height = 42, Padding = new Padding(8, 10, 0, 0) };
+            Games = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true, BorderStyle = BorderStyle.FixedSingle };
+            Games.ItemCheck += delegate(object sender, ItemCheckEventArgs e)
+            {
+                if (String.Equals(Convert.ToString(Games.Items[e.Index]), "Wallpaper Engine", StringComparison.OrdinalIgnoreCase)) e.NewValue = CheckState.Unchecked;
+            };
+            var gameActions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 58, Padding = new Padding(8, 8, 0, 0) };
+            var saveGames = MakeButton("保存游戏设置"); saveGames.Click += delegate { SaveGames(); };
+            var refresh = MakeButton("刷新列表"); refresh.Click += delegate { ReloadGames(); };
+            var addGame = MakeButton("添加游戏 exe…"); addGame.Click += delegate { AddGame(); };
+            gameActions.Controls.Add(saveGames); gameActions.Controls.Add(refresh); gameActions.Controls.Add(addGame);
+            gamesPage.Controls.Add(Games); gamesPage.Controls.Add(gamesTop); gamesPage.Controls.Add(gameActions);
+
+            var updatePage = new TabPage("软件更新") { BackColor = Color.FromArgb(248, 235, 250) };
+            var updateLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(18) };
+            updateLayout.Controls.Add(new Label { Text = "主机版本：" + State.version, Width = 620, Height = 40, Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold) });
+            var updateActions = new FlowLayoutPanel { Width = 700, Height = 48 };
+            var check = MakeButton("检查 GitHub 更新");
+            check.Click += delegate { ThreadPool.QueueUserWorkItem(delegate { try { DisplayServer.CheckNativeRelease(); } catch { } }); };
+            InstallButton = MakeButton("安装更新"); InstallButton.Enabled = false;
+            InstallButton.Click += delegate
+            {
+                try { HostSensor.InstallUpdate(); }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "无法安装", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            updateActions.Controls.Add(check); updateActions.Controls.Add(InstallButton);
+            updateLayout.Controls.Add(updateActions);
+            UpdateProgress = new ProgressBar { Width = 620, Height = 24, Style = ProgressBarStyle.Continuous };
+            updateLayout.Controls.Add(UpdateProgress);
+            UpdateMessage = new Label { Width = 680, Height = 90, Text = "" };
+            updateLayout.Controls.Add(UpdateMessage);
+            updatePage.Controls.Add(updateLayout);
+
+            tabs.TabPages.Add(general); tabs.TabPages.Add(gamesPage); tabs.TabPages.Add(updatePage);
+            Controls.Add(tabs);
+            RefreshTimer = new System.Windows.Forms.Timer { Interval = 700 };
+            RefreshTimer.Tick += delegate { RefreshUpdate(); };
+            RefreshTimer.Start();
+            FormClosed += delegate { RefreshTimer.Stop(); RefreshTimer.Dispose(); };
+            RebuildGames();
+            RefreshStatus();
+            RefreshUpdate();
+        }
+
+        private void RebuildGames()
+        {
+            Games.Items.Clear();
+            var excluded = new HashSet<string>(State.excludedGames ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            foreach (string name in (State.catalog ?? new string[0]).Concat(new[] { "Wallpaper Engine" }).Where(x => !String.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x))
+                Games.Items.Add(name, !excluded.Contains(name));
+        }
+
+        private List<string> CurrentExcluded()
+        {
+            var excluded = new List<string>();
+            foreach (object item in Games.Items)
+                if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
+            return excluded;
+        }
+
+        private void SaveGeneral()
+        {
+            try
+            {
+                HostSensor.SaveHostSettings(AutoUpdate.Checked, CurrentExcluded());
+                HostSensor.SetHostAutostart(StartWithWindows.Checked);
+                State = HostSensor.GetSettingsState();
+                RefreshStatus();
+                MessageBox.Show(this, "主机设置已保存。", "主机设置");
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+
+        private void SaveGames()
+        {
+            try
+            {
+                HostSensor.SaveHostSettings(AutoUpdate.Checked, CurrentExcluded());
+                State = HostSensor.GetSettingsState();
+                RefreshStatus();
+                MessageBox.Show(this, "游戏追踪设置已保存。", "游戏追踪");
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+
+        private void ReloadGames()
+        {
+            State = HostSensor.GetSettingsState();
+            RebuildGames();
+            RefreshStatus();
+        }
+
+        private void AddGame()
+        {
+            using (var dialog = new OpenFileDialog { Filter = "Windows 程序 (*.exe)|*.exe", Title = "选择要追踪的游戏程序", CheckFileExists = true })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    string label = HostSensor.AddCustomGame(dialog.FileName);
+                    State = HostSensor.GetSettingsState();
+                    if (!Games.Items.Contains(label)) Games.Items.Add(label, true);
+                    MessageBox.Show(this, "已添加“" + label + "”。", "游戏追踪");
+                }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "添加失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            }
+        }
+
+        private void OpenFirewall()
+        {
+            try { HostSensor.OpenFirewallPort(); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "无法打开防火墙端口", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+
+        private void RefreshStatus()
+        {
+            string games = State.currentGames == null || State.currentGames.Length == 0 ? "无" : String.Join("、", State.currentGames);
+            Status.Text = "当前主机正在运行的游戏：" + games;
+        }
+
+        private void RefreshUpdate()
+        {
+            var progress = DisplayServer.GetUpdateProgress();
+            UpdateMessage.Text = progress.message ?? "";
+            bool running = progress.state == "checking" || progress.state == "downloading" || progress.state == "verifying" || progress.state == "preparing" || progress.state == "installing";
+            UpdateProgress.Style = running && progress.percent < 0 ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+            if (UpdateProgress.Style == ProgressBarStyle.Continuous) UpdateProgress.Value = Math.Max(0, Math.Min(100, progress.percent));
+            InstallButton.Enabled = progress.state == "available";
+        }
+    }
+}
 

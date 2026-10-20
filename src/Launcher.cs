@@ -109,7 +109,7 @@ namespace NixLanConsoleLauncher
             {
                 process = Process.Start(new ProcessStartInfo(appPath, commandLine)
                 {
-                    UseShellExecute = false,
+                    UseShellExecute = true,
                     WorkingDirectory = Path.GetDirectoryName(appPath)
                 });
             }
@@ -256,4 +256,3 @@ namespace NixLanConsoleLauncher
         }
     }
 }
-

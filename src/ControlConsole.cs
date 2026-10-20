@@ -9,6 +9,7 @@ using System.Linq;
 using System.Management;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -174,6 +175,24 @@ namespace NixLanConsole
         public bool hostAutoUpdate = true;
         public string[] excludedGames = new[] { "Wallpaper Engine" };
         public string hostAddress = "192.168.1.7";
+        public string foliaExePath = "";
+    }
+
+    internal sealed class HostSettings
+    {
+        public bool autoUpdate = true;
+        public string[] excludedGames = new string[0];
+    }
+
+    internal sealed class HostSettingsState
+    {
+        public bool autoUpdate;
+        public string[] excludedGames = new string[0];
+        public string[] catalog = new string[0];
+        public string[] currentGames = new string[0];
+        public string version;
+        public string machine;
+        public bool startWithWindows;
     }
 
     internal sealed class UpdateStatus
@@ -191,6 +210,8 @@ namespace NixLanConsole
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         private static readonly string BootId = Guid.NewGuid().ToString("N");
         private static PerformanceCounter CpuCounter;
+        private static readonly object SlowSensorGate = new object();
+        private static double GpuUsage = -1;
         private static double GpuTemperature = -1;
         private static double CpuTemperature = -1;
         private static DateTime LastTemperatureRead = DateTime.MinValue;
@@ -222,12 +243,22 @@ namespace NixLanConsole
         private static volatile bool GameRunning;
         private static readonly object MetricGate = new object();
         private static MetricPacket LatestPacket;
+        private static readonly string HostSettingsFile = Path.Combine(DataDir, "host-settings.json");
+        private static readonly object HostSettingsGate = new object();
+        private static volatile bool LocalAutoUpdate = true;
+        private static volatile string[] LocalExcludedGames = new string[0];
+        private static TcpListener ActiveListener;
         internal static bool HasGameRunning { get { return GameRunning; } }
-        internal static bool AutoUpdateEnabled { get { return RemoteAutoUpdate; } }
+        internal static bool AutoUpdateEnabled { get { return LocalAutoUpdate && RemoteAutoUpdate; } }
 
         public static void Run()
         {
             Directory.CreateDirectory(DataDir);
+            LoadHostSettings();
+            AppDomain.CurrentDomain.ProcessExit += delegate
+            {
+                try { TcpListener listener = ActiveListener; if (listener != null) listener.Stop(); } catch { }
+            };
             StartTray();
             DiscoverGames();
             LoadCustomGames();
@@ -235,14 +266,30 @@ namespace NixLanConsole
             try { CpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total"); CpuCounter.NextValue(); } catch { }
             var tcpThread = new Thread(TcpServerLoop) { IsBackground = true };
             tcpThread.Start();
+            var slowSensorThread = new Thread(SlowSensorLoop) { IsBackground = true };
+            slowSensorThread.Start();
             while (true)
             {
-                var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = ReadGpuUsage(), cpuTemp = -1, gpuTemp = -1, games = ReadGames(), catalog = GetGameCatalog() };
+                double gpu, cpuTemp, gpuTemp;
+                lock (SlowSensorGate) { gpu = GpuUsage; cpuTemp = CpuTemperature; gpuTemp = GpuTemperature; }
+                var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = gpu, cpuTemp = cpuTemp, gpuTemp = gpuTemp, games = ReadGames(), catalog = GetGameCatalog() };
                 ReadMemory(out p.memoryUsed, out p.memoryTotal);
-                if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 5) { ReadTemperatures(); LastTemperatureRead = DateTime.UtcNow; }
-                p.cpuTemp = CpuTemperature; p.gpuTemp = GpuTemperature;
                 lock (MetricGate) LatestPacket = p;
                 Thread.Sleep(1000);
+            }
+        }
+        private static void SlowSensorLoop()
+        {
+            while (true)
+            {
+                double gpu = ReadGpuUsage();
+                if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 5)
+                {
+                    ReadTemperatures();
+                    LastTemperatureRead = DateTime.UtcNow;
+                }
+                lock (SlowSensorGate) GpuUsage = gpu;
+                Thread.Sleep(2000);
             }
         }
         private static void TcpServerLoop()
@@ -253,7 +300,11 @@ namespace NixLanConsole
                 try
                 {
                     listener = new TcpListener(IPAddress.Any, TcpPort);
+                    // Allow binding while the previous app's listening socket is in TIME_WAIT
+                    // (or inherited by the short-lived launcher during an update).
+                    listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                     listener.Start();
+                    ActiveListener = listener;
                     StartupDiagnostics.Write("TCP listener ready port=" + TcpPort);
                     StartupDiagnostics.Ready("--sensor");
                     while (true)
@@ -263,7 +314,7 @@ namespace NixLanConsole
                     }
                 }
                 catch (Exception ex) { StartupDiagnostics.Write("TCP listener retry: " + ex.Message); Thread.Sleep(5000); }
-                finally { if (listener != null) try { listener.Stop(); } catch { } }
+                finally { if (listener != null) { if (Object.ReferenceEquals(ActiveListener, listener)) ActiveListener = null; try { listener.Stop(); } catch { } } }
             }
         }
         private static void ServeClient(TcpClient client)
@@ -318,21 +369,65 @@ namespace NixLanConsole
         private static void ReadMemory(out double used, out double total)
         {
             used = total = 0;
-            try { using (var s = new ManagementObjectSearcher("SELECT TotalVisibleMemorySize,FreePhysicalMemory FROM Win32_OperatingSystem")) foreach (ManagementObject m in s.Get()) { total = Convert.ToDouble(m["TotalVisibleMemorySize"]) / 1024.0 / 1024.0; used = total - Convert.ToDouble(m["FreePhysicalMemory"]) / 1024.0 / 1024.0; } } catch { }
+            try
+            {
+                var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf(typeof(MemoryStatusEx)) };
+                if (!GlobalMemoryStatusEx(ref status) || status.TotalPhysical == 0) return;
+                total = status.TotalPhysical / 1048576.0;
+                used = (status.TotalPhysical - Math.Min(status.AvailablePhysical, status.TotalPhysical)) / 1048576.0;
+            }
+            catch { }
         }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct MemoryStatusEx
+        {
+            public uint Length;
+            public uint MemoryLoad;
+            public ulong TotalPhysical;
+            public ulong AvailablePhysical;
+            public ulong TotalPageFile;
+            public ulong AvailablePageFile;
+            public ulong TotalVirtual;
+            public ulong AvailableVirtual;
+            public ulong AvailableExtendedVirtual;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
         private static double ReadGpuUsage()
         {
             double sum = 0;
-            try { using (var s = new ManagementObjectSearcher("root\\cimv2", "SELECT UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine")) foreach (ManagementObject m in s.Get()) sum += Convert.ToDouble(m["UtilizationPercentage"]); } catch { return -1; }
+            try
+            {
+                using (var s = new ManagementObjectSearcher("root\\cimv2", "SELECT UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"))
+                using (var results = s.Get())
+                    foreach (ManagementObject m in results) using (m) sum += Convert.ToDouble(m["UtilizationPercentage"]);
+            }
+            catch { return -1; }
             return Math.Min(100, Math.Round(sum, 1));
         }
         private static void ReadTemperatures()
         {
-            try { using (var s = new ManagementObjectSearcher("root\\wmi", "SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")) foreach (ManagementObject m in s.Get()) { double t = Convert.ToDouble(m["CurrentTemperature"]) / 10.0 - 273.15; if (t > 0 && t < 120) { CpuTemperature = Math.Round(t, 0); break; } } } catch { }
+            double cpuTemperature = -1;
             try
             {
-                var psi = new ProcessStartInfo("nvidia-smi.exe", "--query-gpu=temperature.gpu --format=csv,noheader,nounits") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                using (var p = Process.Start(psi)) { string result = p.StandardOutput.ReadToEnd(); p.WaitForExit(1500); double t; if (double.TryParse(result.Trim().Split('\n')[0], out t)) GpuTemperature = t; }
+                using (var s = new ManagementObjectSearcher("root\\wmi", "SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature"))
+                using (var results = s.Get())
+                    foreach (ManagementObject m in results) using (m) { double t = Convert.ToDouble(m["CurrentTemperature"]) / 10.0 - 273.15; if (t > 0 && t < 120) { cpuTemperature = Math.Round(t, 0); break; } }
+            }
+            catch { }
+            if (cpuTemperature >= 0) lock (SlowSensorGate) CpuTemperature = cpuTemperature;
+            try
+            {
+                var psi = new ProcessStartInfo("nvidia-smi.exe", "--query-gpu=temperature.gpu --format=csv,noheader,nounits") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = false };
+                using (var p = Process.Start(psi))
+                {
+                    var output = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(1500)) { p.Kill(); p.WaitForExit(); }
+                    string result = output.GetAwaiter().GetResult();
+                    double t;
+                    if (p.ExitCode == 0 && double.TryParse(result.Trim().Split('\n')[0], out t)) lock (SlowSensorGate) GpuTemperature = t;
+                }
             }
             catch { }
         }
@@ -343,6 +438,8 @@ namespace NixLanConsole
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             HashSet<string> excluded;
             lock (ControlGate) excluded = new HashSet<string>(RemoteExcludedGames, StringComparer.OrdinalIgnoreCase);
+            foreach (string name in LocalExcludedGames ?? new string[0]) if (!String.IsNullOrWhiteSpace(name)) excluded.Add(name);
+            excluded.Add("Wallpaper Engine");
             foreach (var p in Process.GetProcesses())
             {
                 try
@@ -461,6 +558,117 @@ namespace NixLanConsole
             }
             catch { }
         }
+
+        private static void LoadHostSettings()
+        {
+            try
+            {
+                if (!File.Exists(HostSettingsFile)) return;
+                var settings = Json.Deserialize<HostSettings>(File.ReadAllText(HostSettingsFile, Encoding.UTF8));
+                if (settings == null) return;
+                LocalAutoUpdate = settings.autoUpdate;
+                LocalExcludedGames = (settings.excludedGames ?? new string[0]).Where(x => !String.IsNullOrWhiteSpace(x)).ToArray();
+            }
+            catch (Exception ex) { StartupDiagnostics.Write("host settings load: " + ex.Message); }
+        }
+
+        internal static void SaveHostSettings(bool autoUpdate, IEnumerable<string> excludedGames)
+        {
+            var names = new HashSet<string>(excludedGames ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            names.Remove("Wallpaper Engine");
+            if (names.Count > 256 || names.Any(x => String.IsNullOrWhiteSpace(x) || x.Length > 100)) throw new ArgumentException("游戏排除列表无效");
+            var settings = new HostSettings { autoUpdate = autoUpdate, excludedGames = names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray() };
+            lock (HostSettingsGate)
+            {
+                Directory.CreateDirectory(DataDir);
+                File.WriteAllText(HostSettingsFile, Json.Serialize(settings), Encoding.UTF8);
+                LocalAutoUpdate = autoUpdate;
+                LocalExcludedGames = settings.excludedGames;
+            }
+        }
+
+        internal static HostSettingsState GetSettingsState()
+        {
+            MetricPacket packet;
+            lock (MetricGate) packet = LatestPacket;
+            return new HostSettingsState
+            {
+                autoUpdate = LocalAutoUpdate,
+                excludedGames = (LocalExcludedGames ?? new string[0]).ToArray(),
+                catalog = packet == null || packet.catalog == null ? new string[0] : (string[])packet.catalog.Clone(),
+                currentGames = packet == null || packet.games == null ? new string[0] : (string[])packet.games.Clone(),
+                version = BuildInfo.Version,
+                machine = Environment.MachineName,
+                startWithWindows = IsHostAutostartEnabled()
+            };
+        }
+
+        internal static string AddCustomGame(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (!File.Exists(path) || !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("请选择有效的游戏 exe。");
+            string label = Path.GetFileNameWithoutExtension(path);
+            string file = Path.Combine(DataDir, "tracked-games.txt");
+            Directory.CreateDirectory(DataDir);
+            var lines = File.Exists(file) ? File.ReadAllLines(file).ToList() : new List<string>();
+            lines.RemoveAll(delegate(string line)
+            {
+                int bar = line.IndexOf('|');
+                if (bar <= 0) return false;
+                try { return String.Equals(Path.GetFullPath(line.Substring(0, bar).Trim()), path, StringComparison.OrdinalIgnoreCase); }
+                catch { return false; }
+            });
+            lines.Add(path + "|" + label);
+            File.WriteAllLines(file, lines, Encoding.UTF8);
+            LastGameConfigRead = DateTime.MinValue;
+            LoadCustomGames();
+            return label;
+        }
+
+        internal static bool IsHostAutostartEnabled()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
+                {
+                    string value = Convert.ToString(key == null ? null : key.GetValue("NixLanConsoleHost"));
+                    return !String.IsNullOrWhiteSpace(value) && value.IndexOf("--sensor", StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+            }
+            catch { return false; }
+        }
+
+        internal static void SetHostAutostart(bool enabled)
+        {
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
+            {
+                if (enabled)
+                {
+                    string exe = BuildInfo.LauncherPath;
+                    if (!File.Exists(exe)) exe = Application.ExecutablePath;
+                    key.SetValue("NixLanConsoleHost", "\"" + exe + "\" --sensor", Microsoft.Win32.RegistryValueKind.String);
+                }
+                else key.DeleteValue("NixLanConsoleHost", false);
+            }
+        }
+
+        internal static void OpenFirewallPort()
+        {
+            string script = Path.Combine(BuildInfo.InstallDir, "OpenHostTcpPort.ps1");
+            if (!File.Exists(script)) throw new FileNotFoundException("找不到 OpenHostTcpPort.ps1", script);
+            Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"")
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+        }
+
+        internal static void InstallUpdate()
+        {
+            if (GameRunning) throw new InvalidOperationException("游戏仍在运行，请退出后再安装更新。");
+            ThreadPool.QueueUserWorkItem(delegate { DisplayServer.CheckForUpdate("--sensor-force"); });
+        }
     }
 
     internal sealed class GameSession
@@ -497,7 +705,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.7.1.0";
+        public const string Version = "1.7.4.0";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -538,7 +746,7 @@ namespace NixLanConsole
         private static int UpdateStarted;
         private static readonly object UpdateProgressGate = new object();
         private static string UpdateProgressState = "idle";
-        private static string UpdateProgressMessage = "每 30 分钟检查 GitHub 最新版本。";
+        private static string UpdateProgressMessage = "定时检查 GitHub 最新版本。";
         private static string UpdateProgressVersion = "";
         private static int UpdateProgressPercent = -1;
         private static readonly string BaseDir = BuildInfo.InstallDir;
@@ -582,12 +790,12 @@ namespace NixLanConsole
             Version attempted = null;
             try
             {
-                bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal);
-                bool force = String.Equals(ignored as string, "--display-force", StringComparison.Ordinal);
+                bool hostMode = String.Equals(ignored as string, "--sensor", StringComparison.Ordinal) || String.Equals(ignored as string, "--sensor-force", StringComparison.Ordinal);
+                bool force = String.Equals(ignored as string, "--display-force", StringComparison.Ordinal) || String.Equals(ignored as string, "--sensor-force", StringComparison.Ordinal);
                 if (hostMode)
                 {
                     if (HostSensor.HasGameRunning) { SetUpdateProgress("waiting", -1, "", "主机游戏运行中，自动更新检查暂缓。"); return; }
-                    if (!HostSensor.AutoUpdateEnabled) { SetUpdateProgress("disabled", -1, "", "主机自动更新已关闭。"); return; }
+                    if (!force && !HostSensor.AutoUpdateEnabled) { SetUpdateProgress("disabled", -1, "", "主机自动更新已关闭。"); return; }
                 }
                 else
                 {
@@ -896,7 +1104,7 @@ namespace NixLanConsole
             if (!File.Exists(launcher) || String.Equals(Path.GetFullPath(launcher), Path.GetFullPath(Application.ExecutablePath), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("当前安装不是 1.7 版本目录布局，请使用完整安装包升级。");
             string args = "--wait-pid " + Process.GetCurrentProcess().Id + " " + role;
-            Process started = Process.Start(new ProcessStartInfo(launcher, args) { UseShellExecute = false, WorkingDirectory = BuildInfo.InstallDir });
+            Process started = Process.Start(new ProcessStartInfo(launcher, args) { UseShellExecute = true, WorkingDirectory = BuildInfo.InstallDir });
             if (started == null) throw new InvalidOperationException("Windows 未能启动更新启动器。");
             using (started)
             {
@@ -951,7 +1159,14 @@ namespace NixLanConsole
                     {
                         client.ReceiveTimeout = 1800; client.SendTimeout = 1800;
                         var pending = client.BeginConnect(ip, TcpPort, null, null);
-                        if (!pending.AsyncWaitHandle.WaitOne(1800)) throw new TimeoutException("连接主机超时");
+                        bool connected;
+                        using (WaitHandle waitHandle = pending.AsyncWaitHandle) connected = waitHandle.WaitOne(1800);
+                        if (!connected)
+                        {
+                            client.Close();
+                            try { client.EndConnect(pending); } catch { }
+                            throw new TimeoutException("连接主机超时");
+                        }
                         client.EndConnect(pending);
                         using (var stream = client.GetStream())
                         using (var reader = new StreamReader(stream, Encoding.UTF8))
@@ -1026,6 +1241,10 @@ namespace NixLanConsole
             Role = "kangel"; EventId++;
         }
         private static string SettingsFile { get { return Path.Combine(DataDir, "settings.json"); } }
+        internal static string GetFoliaExecutablePath()
+        {
+            lock (Gate) return Settings == null ? "" : (Settings.foliaExePath ?? "");
+        }
         private static void LoadSettings()
         {
             try
@@ -1063,14 +1282,21 @@ namespace NixLanConsole
                 return LatestReleaseVersionFromWeb(repository);
             }
         }
-        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress)
+        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress, string foliaExePath)
         {
             hostAddress = (hostAddress ?? "").Trim();
             if (hostAddress.Length < 1 || hostAddress.Length > 255 || Uri.CheckHostName(hostAddress) == UriHostNameType.Unknown) throw new ArgumentException("请输入有效的主机 IPv4 地址或计算机名。");
+            foliaExePath = (foliaExePath ?? "").Trim().Trim('"');
+            if (foliaExePath.Length > 0)
+            {
+                if (foliaExePath.Length > 1024 || !Path.IsPathRooted(foliaExePath) || !String.Equals(Path.GetExtension(foliaExePath), ".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(foliaExePath))
+                    throw new ArgumentException("Folia 程序路径无效，请选择已安装的 Folia.exe。", "foliaExePath");
+                foliaExePath = Path.GetFullPath(foliaExePath);
+            }
             var names = new HashSet<string>(excludedGames ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
             names.Add("Wallpaper Engine");
             if (names.Count > 256 || names.Any(x => String.IsNullOrWhiteSpace(x) || x.Length > 100)) throw new ArgumentException("游戏排除列表无效");
-            var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, excludedGames = names.ToArray(), hostAddress = hostAddress };
+            var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, excludedGames = names.ToArray(), hostAddress = hostAddress, foliaExePath = foliaExePath };
             lock (Gate)
             {
                 File.WriteAllText(SettingsFile, Json.Serialize(proposed), Encoding.UTF8);
@@ -1302,11 +1528,10 @@ namespace NixLanConsole
             var status = new ToolStripMenuItem("主机监控运行中") { Enabled = false };
             menu.Items.Add(status);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("设置…", null, delegate { using (var dialog = new NativeHostSettingsDialog()) dialog.ShowDialog(); });
             menu.Items.Add("退出主机监控", null, delegate { Environment.Exit(0); });
             Icon = new NotifyIcon { Text = "局域网桌面控制台 · 主机监控", Icon = SystemIcons.Application, ContextMenuStrip = menu, Visible = true };
         }
         protected override void ExitThreadCore() { Icon.Visible = false; Icon.Dispose(); base.ExitThreadCore(); }
     }
 }
-
-

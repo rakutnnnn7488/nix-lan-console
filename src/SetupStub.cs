@@ -158,7 +158,9 @@ namespace NixLanConsoleSetup
                         }
                     }
                 }
-                if (!File.Exists(Path.Combine(stage, "ControlConsole.exe")) || !File.Exists(Path.Combine(stage, "Updater.exe"))) throw new InvalidDataException("安装包未通过完整性检查：缺少程序文件。");
+                if (!File.Exists(Path.Combine(stage, "ControlConsole.exe")) || !File.Exists(Path.Combine(stage, "versions", Version, "ControlConsole.exe"))) throw new InvalidDataException("安装包未通过完整性检查：缺少程序文件。");
+                if (!File.Exists(Path.Combine(stage, "versions", Version, ".complete"))) throw new InvalidDataException("安装包未通过完整性检查：版本目录未完成。");
+                if (!File.Exists(Path.Combine(stage, "current.txt"))) throw new InvalidDataException("安装包未通过完整性检查：缺少 current.txt。");
                 if (!File.Exists(Path.Combine(stage, "game-assets", "native-role", "角色动画.json"))) throw new InvalidDataException("安装包未通过完整性检查：缺少角色动画素材。");
                 worker.ReportProgress(88, "正在切换到新版本…");
                 if (Directory.Exists(target)) { Directory.Move(target, backup); movedOld = true; }
@@ -180,16 +182,25 @@ namespace NixLanConsoleSetup
                     if (File.Exists(readyFile)) File.Delete(readyFile);
                     started = Process.Start(new ProcessStartInfo(exe, role) { UseShellExecute = true, WorkingDirectory = target });
                     if (started == null) throw new InvalidOperationException("Windows 未能启动安装后的程序。");
-                    DateTime deadline = DateTime.UtcNow.AddSeconds(String.IsNullOrEmpty(role) ? 3 : 15);
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(String.IsNullOrEmpty(role) ? 5 : 35);
                     bool ready = String.IsNullOrEmpty(role);
                     while (DateTime.UtcNow < deadline)
                     {
-                        started.Refresh();
-                        if (started.HasExited) throw new InvalidOperationException("新版本启动后立即退出。安装已回滚，请稍后重试。");
                         if (!String.IsNullOrEmpty(role) && File.Exists(readyFile))
                         {
                             string[] parts = File.ReadAllText(readyFile).Trim().TrimStart('\uFEFF').Split('|');
-                            if (parts.Length >= 3 && parts[0] == started.Id.ToString() && parts[1] == Version && parts[2] == role) { ready = true; break; }
+                            if (parts.Length >= 3 && parts[1] == Version && parts[2] == role) { ready = true; break; }
+                        }
+                        started.Refresh();
+                        if (started.HasExited)
+                        {
+                            // The launcher exits after it has verified the app; re-check readiness once.
+                            if (File.Exists(readyFile))
+                            {
+                                string[] parts = File.ReadAllText(readyFile).Trim().TrimStart('\uFEFF').Split('|');
+                                if (parts.Length >= 3 && parts[1] == Version && parts[2] == role) { ready = true; break; }
+                            }
+                            throw new InvalidOperationException("新版本启动后立即退出。安装已回滚，请稍后重试。");
                         }
                         System.Threading.Thread.Sleep(250);
                     }
@@ -244,7 +255,7 @@ namespace NixLanConsoleSetup
                 }
                 else
                 {
-                    if (!File.Exists(Path.Combine(target, "ControlConsole.exe")) || !File.Exists(Path.Combine(target, "game-assets", "native-role", "角色动画.json"))) result = 12;
+                    if (!File.Exists(Path.Combine(target, "ControlConsole.exe")) || !File.Exists(Path.Combine(target, "versions", form.Version, "ControlConsole.exe")) || !File.Exists(Path.Combine(target, "versions", form.Version, ".complete")) || !File.Exists(Path.Combine(target, "game-assets", "native-role", "角色动画.json"))) result = 12;
                     if (backups.Length != 1 || !File.Exists(Path.Combine(backups[0], "legacy.marker"))) result = 13;
                 }
             }
@@ -260,13 +271,13 @@ namespace NixLanConsoleSetup
 
         private static void StopProcessesFrom(string target)
         {
-            string expected = Path.GetFullPath(Path.Combine(target, "ControlConsole.exe"));
+            string root = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             foreach (Process process in Process.GetProcessesByName("ControlConsole"))
             {
                 try
                 {
-                    string actual = process.MainModule.FileName;
-                    if (String.Equals(Path.GetFullPath(actual), expected, StringComparison.OrdinalIgnoreCase))
+                    string actual = Path.GetFullPath(process.MainModule.FileName);
+                    if (actual.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                     {
                         process.CloseMainWindow();
                         if (!process.WaitForExit(2500)) process.Kill();
@@ -275,6 +286,7 @@ namespace NixLanConsoleSetup
                 }
                 catch (System.ComponentModel.Win32Exception) { }
                 catch (InvalidOperationException) { }
+                catch (ArgumentException) { }
             }
         }
 
@@ -375,14 +387,21 @@ namespace NixLanConsoleSetup
                         if (resource == null) { Environment.ExitCode = 2; return; }
                         using (var archive = new ZipArchive(resource, ZipArchiveMode.Read))
                         {
-                            if (archive.GetEntry("ControlConsole.exe") == null || archive.GetEntry("Updater.exe") == null || archive.GetEntry("ApplyUpdate.ps1") == null || !archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "game-assets/native-role/角色动画.json", StringComparison.Ordinal))) { Environment.ExitCode = 3; return; }
                             var versionEntry = archive.GetEntry("version.txt");
                             if (versionEntry == null) { Environment.ExitCode = 4; return; }
-                            using (var stream = versionEntry.Open()) using (var reader = new StreamReader(stream))
-                            {
-                                Version version;
-                                if (!System.Version.TryParse(reader.ReadToEnd().Trim(), out version)) { Environment.ExitCode = 4; return; }
-                            }
+                            string versionText;
+                            using (var stream = versionEntry.Open()) using (var reader = new StreamReader(stream, Encoding.UTF8)) versionText = reader.ReadToEnd().Trim().TrimStart('\uFEFF');
+                            Version version;
+                            if (!System.Version.TryParse(versionText, out version)) { Environment.ExitCode = 4; return; }
+                            if (archive.GetEntry("ControlConsole.exe") == null
+                                || !archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "versions/" + version + "/ControlConsole.exe", StringComparison.OrdinalIgnoreCase))
+                                || !archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "versions/" + version + "/.complete", StringComparison.OrdinalIgnoreCase))
+                                || archive.GetEntry("current.txt") == null
+                                || !archive.Entries.Any(e => String.Equals(e.FullName.Replace('\\', '/'), "game-assets/native-role/角色动画.json", StringComparison.Ordinal))) { Environment.ExitCode = 3; return; }
+                            var currentEntry = archive.GetEntry("current.txt");
+                            string currentText;
+                            using (var stream = currentEntry.Open()) using (var reader = new StreamReader(stream, Encoding.UTF8)) currentText = reader.ReadToEnd().Trim().TrimStart('\uFEFF');
+                            if (!String.Equals(currentText, version.ToString(), StringComparison.OrdinalIgnoreCase)) { Environment.ExitCode = 6; return; }
                         }
                     }
                     Environment.ExitCode = 0;
