@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
 # Versioned application (never replaced while running).
-& $csc /nologo /target:winexe "/out:$(Join-Path $appDir 'ControlConsole.exe')" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Management.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:System.Configuration.dll (Join-Path $PSScriptRoot 'src\ControlConsole.cs') (Join-Path $PSScriptRoot 'src\NativeConsoleWindow.cs') (Join-Path $PSScriptRoot 'src\NativeDialogs.cs') (Join-Path $PSScriptRoot 'src\FoliaWindowHost.cs')
+& $csc /nologo /target:winexe "/out:$(Join-Path $appDir 'ControlConsole.exe')" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Management.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:System.Configuration.dll (Join-Path $PSScriptRoot 'src\ControlConsole.cs') (Join-Path $PSScriptRoot 'src\NativeConsoleWindow.cs') (Join-Path $PSScriptRoot 'src\NativeDialogs.cs') (Join-Path $PSScriptRoot 'src\FoliaWindowHost.cs') (Join-Path $PSScriptRoot 'src\FoliaLanRelay.cs')
 if ($LASTEXITCODE -ne 0) { throw "C# compilation failed:$LASTEXITCODE" }
 
 # Stable launcher at the installation root.

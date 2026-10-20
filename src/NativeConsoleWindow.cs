@@ -73,6 +73,8 @@ namespace NixLanConsole
         private DateTime TransformationStarted;
         private bool Transforming;
         private bool PreviousGameRunning;
+        private bool PreviousFoliaPlaying;
+        private DateTime FoliaExitedAtUtc = DateTime.MinValue;
         private string LiveGameName = "";
         private Panel ActiveCard;
         private PrivateFontCollection PixelFonts;
@@ -212,7 +214,7 @@ namespace NixLanConsole
             LiveCanvas = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(255, 248, 255) };
             LiveCanvas.Paint += PaintLive;
             LiveCard.Controls.Add(LiveCanvas); LiveCard.Visible = false; Desktop.Controls.Add(LiveCard);
-            FoliaCard = Card("Folia 音乐", 1000);
+            FoliaCard = Card("Folia 歌词", 1000);
             FoliaSurface = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(27, 20, 43) };
             FoliaCard.Controls.Add(FoliaSurface); FoliaCard.Visible = false; Desktop.Controls.Add(FoliaCard);
             FoliaHost = new FoliaWindowHost(FoliaSurface);
@@ -353,22 +355,27 @@ namespace NixLanConsole
 
         private void OpenSettings() { using (var dialog = new NativeSettingsDialog()) dialog.ShowDialog(this); }
 
-        private void OpenFolia()
+        private void OpenFolia() { OpenFolia(true); }
+
+        private void OpenFolia(bool showError)
         {
-            string executable = DisplayServer.GetFoliaExecutablePath();
-            if (String.IsNullOrWhiteSpace(executable))
+            DashboardState state = DisplayServer.Snapshot();
+            if (!state.online || String.IsNullOrWhiteSpace(state.foliaKey))
             {
-                MessageBox.Show(this, "请先在「开始 → 设置 → Folia」中选择 Folia.exe 并保存。", "Folia 尚未配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                OpenSettings();
-                executable = DisplayServer.GetFoliaExecutablePath();
-                if (String.IsNullOrWhiteSpace(executable)) return;
+                if (showError) MessageBox.Show(this, "主机尚未连接或主机软件版本尚未包含 Folia 局域网动效功能。", "Folia 暂不可用", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
             try
             {
+                string url = "http://" + state.hostAddress + ":46702/display?key=" + Uri.EscapeDataString(state.foliaKey);
                 FocusCard(FoliaCard);
-                FoliaHost.Launch(executable);
+                FoliaHost.Launch(url);
             }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "无法打开 Folia", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex)
+            {
+                StartupDiagnostics.Write("Folia display launch: " + ex.Message);
+                if (showError) MessageBox.Show(this, ex.Message, "无法打开 Folia 歌词动效", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void FocusCard(Panel card)
@@ -454,7 +461,11 @@ namespace NixLanConsole
                 for (int command = 0; command < 3; command++)
                 {
                     if (!CardButtonBounds(card, command).Contains(e.Location)) continue;
-                    if (command == 0 || command == 2) card.Visible = false;
+                    if (command == 0 || command == 2)
+                    {
+                        card.Visible = false;
+                        if (command == 2 && card == FoliaCard) FoliaHost.Close();
+                    }
                     else if (command == 1)
                     {
                         if (card.Tag is Rectangle) { card.Bounds = (Rectangle)card.Tag; card.Tag = null; }
@@ -614,6 +625,20 @@ namespace NixLanConsole
             }
             if (!playing && !kangel) { Transforming = false; TransitionOverlay.Visible = false; LiveCard.Visible = false; LiveTab.Visible = false; }
             PreviousGameRunning = playing;
+            bool foliaPlaying = state.online && state.foliaPlaying && !String.IsNullOrWhiteSpace(state.foliaKey);
+            if (foliaPlaying && !PreviousFoliaPlaying) OpenFolia(false);
+            PreviousFoliaPlaying = foliaPlaying;
+            if (state.online && !state.foliaRunning && FoliaCard.Visible)
+            {
+                if (FoliaExitedAtUtc == DateTime.MinValue) FoliaExitedAtUtc = DateTime.UtcNow;
+                else if ((DateTime.UtcNow - FoliaExitedAtUtc).TotalSeconds >= 10)
+                {
+                    FoliaHost.Close();
+                    FoliaCard.Visible = false;
+                    FoliaExitedAtUtc = DateTime.MinValue;
+                }
+            }
+            else FoliaExitedAtUtc = DateTime.MinValue;
             if (LiveCard.Visible) LiveCanvas.Invalidate();
             var latestFinished = (state.sessions ?? new GameSession[0]).Where(s => s != null && s.end > s.start && !String.Equals(s.game, "Wallpaper Engine", StringComparison.OrdinalIgnoreCase)).OrderByDescending(s => s.end).FirstOrDefault();
             LatestRecap = latestFinished;

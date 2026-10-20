@@ -282,7 +282,6 @@ namespace NixLanConsole
         private readonly CheckBox AutoUpdate;
         private readonly CheckBox HostAutoUpdate;
         private readonly TextBox HostAddress;
-        private readonly TextBox FoliaExecutable;
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
         private readonly Button InstallButton;
@@ -328,31 +327,19 @@ namespace NixLanConsole
             var foliaLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20) };
             foliaLayout.Controls.Add(new Label
             {
-                Text = "把 Folia 播放器嵌入桌面中的可拖动窗口。点击桌面「Folia」图标时，控制台会启动播放器并将其窗口放入 Folia 卡片。",
-                Width = 690, Height = 58, AutoSize = false
+                Text = "主机播放音乐时，副机会自动在控制台窗口显示 Folia 歌词动效。也可以点击桌面「Folia」图标手动打开。",
+                Width = 690, Height = 68, AutoSize = false
             });
-            foliaLayout.Controls.Add(new Label { Text = "Folia.exe 路径：", Width = 650, Height = 24, Padding = new Padding(0, 5, 0, 0) });
-            var foliaPathRow = new FlowLayoutPanel { Width = 700, Height = 38, WrapContents = false, Margin = new Padding(0, 0, 0, 10) };
-            string savedFoliaPath = DisplayServer.GetFoliaExecutablePath();
-            if (String.IsNullOrWhiteSpace(savedFoliaPath) && File.Exists(@"D:\folia\Folia.exe")) savedFoliaPath = @"D:\folia\Folia.exe";
-            FoliaExecutable = new TextBox { Text = savedFoliaPath, Width = 520, Height = 28 };
-            var browseFolia = MakeButton("浏览…");
-            browseFolia.Click += delegate
-            {
-                using (var picker = new OpenFileDialog { Filter = "Folia 播放器 (Folia.exe)|Folia.exe|Windows 程序 (*.exe)|*.exe", Title = "选择 Folia.exe", CheckFileExists = true })
-                {
-                    if (!String.IsNullOrWhiteSpace(FoliaExecutable.Text) && File.Exists(FoliaExecutable.Text)) picker.FileName = FoliaExecutable.Text;
-                    if (picker.ShowDialog(this) == DialogResult.OK) FoliaExecutable.Text = picker.FileName;
-                }
-            };
-            foliaPathRow.Controls.Add(FoliaExecutable); foliaPathRow.Controls.Add(browseFolia); foliaLayout.Controls.Add(foliaPathRow);
             foliaLayout.Controls.Add(new Label
             {
-                Text = "点击保存后，桌面会出现可拖动的 Folia 窗口入口。播放、歌词和视觉效果仍由本机 Folia 播放器负责。关闭控制台时会把播放器窗口还原为普通窗口。",
-                Width = 690, Height = 66, AutoSize = false
+                Text = "主机需运行 Folia，并在 Folia 设置中开启 OBS 浏览器源。副机不需要安装 Folia，也不用填写播放器路径。",
+                Width = 690, Height = 58, AutoSize = false
             });
-            var saveFolia = MakeButton("保存 Folia 设置"); saveFolia.Click += delegate { SaveGames(); };
-            foliaLayout.Controls.Add(saveFolia);
+            foliaLayout.Controls.Add(new Label
+            {
+                Text = "原版歌词动效通过现有主副机连接传到副机，在游戏风格卡片内显示。暂停时保留画面；主机退出 Folia 后自动关闭卡片。",
+                Width = 690, Height = 48, AutoSize = false
+            });
             foliaTab.Controls.Add(foliaLayout);
 
             tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); Controls.Add(tabs);
@@ -364,7 +351,7 @@ namespace NixLanConsole
         {
             var excluded = new List<string>();
             foreach (object item in Games.Items) if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
-            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text, FoliaExecutable.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
+            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         private void PurgeSelected()

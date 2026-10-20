@@ -161,6 +161,10 @@ namespace NixLanConsole
         public double gpuTemp;
         public string[] games;
         public string[] catalog;
+        public string foliaKey;
+        public bool foliaConnected;
+        public bool foliaPlaying;
+        public bool foliaRunning;
     }
 
     internal sealed class ControlPacket
@@ -260,19 +264,24 @@ namespace NixLanConsole
                 try { TcpListener listener = ActiveListener; if (listener != null) listener.Stop(); } catch { }
             };
             StartTray();
-            DiscoverGames();
-            LoadCustomGames();
+            FoliaLanRelay.Start();
             UpdateTimer = new System.Threading.Timer(DisplayServer.CheckForUpdate, "--sensor", TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
             try { CpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total"); CpuCounter.NextValue(); } catch { }
+            lock (MetricGate)
+                LatestPacket = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version,
+                    utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = -1, gpu = -1, cpuTemp = -1, gpuTemp = -1,
+                    games = new string[0], catalog = new string[0], foliaKey = FoliaLanRelay.AccessKey };
             var tcpThread = new Thread(TcpServerLoop) { IsBackground = true };
             tcpThread.Start();
             var slowSensorThread = new Thread(SlowSensorLoop) { IsBackground = true };
             slowSensorThread.Start();
+            DiscoverGames();
+            LoadCustomGames();
             while (true)
             {
                 double gpu, cpuTemp, gpuTemp;
                 lock (SlowSensorGate) { gpu = GpuUsage; cpuTemp = CpuTemperature; gpuTemp = GpuTemperature; }
-                var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = gpu, cpuTemp = cpuTemp, gpuTemp = gpuTemp, games = ReadGames(), catalog = GetGameCatalog() };
+                var p = new MetricPacket { host = Environment.MachineName, bootId = BootId, version = BuildInfo.Version, utc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cpu = ReadCpu(), memoryUsed = 0, memoryTotal = 0, gpu = gpu, cpuTemp = cpuTemp, gpuTemp = gpuTemp, games = ReadGames(), catalog = GetGameCatalog(), foliaKey = FoliaLanRelay.AccessKey, foliaConnected = FoliaLanRelay.Connected, foliaPlaying = FoliaLanRelay.Playing, foliaRunning = FoliaLanRelay.SourceRunning };
                 ReadMemory(out p.memoryUsed, out p.memoryTotal);
                 lock (MetricGate) LatestPacket = p;
                 Thread.Sleep(1000);
@@ -329,6 +338,11 @@ namespace NixLanConsole
                     using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
                     {
                         string line = reader.ReadLine();
+                        if (line != null && line.StartsWith("GET /", StringComparison.Ordinal))
+                        {
+                            FoliaLanRelay.ServeHttp(client, stream, reader, line);
+                            return;
+                        }
                         if (String.IsNullOrEmpty(line) || line.Length > 16384) return;
                         var control = Json.Deserialize<ControlPacket>(line);
                         if (control != null)
@@ -336,8 +350,20 @@ namespace NixLanConsole
                             lock (ControlGate) RemoteExcludedGames = new HashSet<string>((control.excludedGames ?? new string[0]).Where(x => !String.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
                             RemoteAutoUpdate = control.hostAutoUpdate;
                         }
-                        MetricPacket current; lock (MetricGate) current = LatestPacket;
-                        if (current != null) writer.WriteLine(Json.Serialize(current));
+                        string packet = null;
+                        lock (MetricGate)
+                        {
+                            MetricPacket current = LatestPacket;
+                            if (current != null)
+                            {
+                                current.foliaKey = FoliaLanRelay.AccessKey;
+                                current.foliaConnected = FoliaLanRelay.Connected;
+                                current.foliaPlaying = FoliaLanRelay.Playing;
+                                current.foliaRunning = FoliaLanRelay.SourceRunning;
+                                packet = Json.Serialize(current);
+                            }
+                        }
+                        if (packet != null) writer.WriteLine(packet);
                     }
                 }
                 catch (Exception ex) { StartupDiagnostics.Write("TCP client error: " + ex.Message); }
@@ -691,6 +717,10 @@ namespace NixLanConsole
         public string hostAddress;
         public double cpu, memoryUsed, memoryTotal, gpu, cpuTemp, gpuTemp;
         public string[] games = new string[0];
+        public string foliaKey;
+        public bool foliaConnected;
+        public bool foliaPlaying;
+        public bool foliaRunning;
         public string role = "ame";
         public long roleEvent;
         public long returnInSeconds;
@@ -705,7 +735,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.7.4.0";
+        public const string Version = "1.7.4.1";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -778,6 +808,7 @@ namespace NixLanConsole
         public static void Run()
         {
             Directory.CreateDirectory(DataDir); LoadSettings(); LoadSessions();
+            LegacyFoliaDisplayMigration.Run();
             UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(30));
             Tray = new TrayContext();
             var tcpThread = new Thread(ReadTcp) { IsBackground = true }; tcpThread.Start();
@@ -1282,21 +1313,14 @@ namespace NixLanConsole
                 return LatestReleaseVersionFromWeb(repository);
             }
         }
-        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress, string foliaExePath)
+        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress)
         {
             hostAddress = (hostAddress ?? "").Trim();
             if (hostAddress.Length < 1 || hostAddress.Length > 255 || Uri.CheckHostName(hostAddress) == UriHostNameType.Unknown) throw new ArgumentException("请输入有效的主机 IPv4 地址或计算机名。");
-            foliaExePath = (foliaExePath ?? "").Trim().Trim('"');
-            if (foliaExePath.Length > 0)
-            {
-                if (foliaExePath.Length > 1024 || !Path.IsPathRooted(foliaExePath) || !String.Equals(Path.GetExtension(foliaExePath), ".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(foliaExePath))
-                    throw new ArgumentException("Folia 程序路径无效，请选择已安装的 Folia.exe。", "foliaExePath");
-                foliaExePath = Path.GetFullPath(foliaExePath);
-            }
             var names = new HashSet<string>(excludedGames ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
             names.Add("Wallpaper Engine");
             if (names.Count > 256 || names.Any(x => String.IsNullOrWhiteSpace(x) || x.Length > 100)) throw new ArgumentException("游戏排除列表无效");
-            var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, excludedGames = names.ToArray(), hostAddress = hostAddress, foliaExePath = foliaExePath };
+            var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, excludedGames = names.ToArray(), hostAddress = hostAddress };
             lock (Gate)
             {
                 File.WriteAllText(SettingsFile, Json.Serialize(proposed), Encoding.UTF8);
@@ -1366,7 +1390,7 @@ namespace NixLanConsole
                     ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); MarkSessionsDirty(true);
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (!AnyGame && ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
                 }
-                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
+                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), foliaKey = online && Last != null ? Last.foliaKey : null, foliaConnected = online && Last != null && Last.foliaConnected, foliaPlaying = online && Last != null && Last.foliaPlaying, foliaRunning = online && Last != null && Last.foliaRunning, role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
             }
         }
         private static string SessionFile { get { return Path.Combine(DataDir, "sessions.json"); } }
