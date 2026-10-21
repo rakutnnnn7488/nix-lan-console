@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.0.1**，修复 Folia 播放时配置事件超过 64 KiB 导致播放事件流断开的问题；源码版本不代表远端已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.0.2**，修复 Folia 播放事件和更新后启动器误判旧进程仍在运行的问题；源码版本不代表远端已发布该版本。
 
 ## 安装布局
 

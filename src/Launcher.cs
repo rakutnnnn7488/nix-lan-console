@@ -58,17 +58,30 @@ namespace NixLanConsoleLauncher
                 }
                 passThrough.Add(args[index]);
             }
-            if (waitPid > 0 && !WaitForPid(waitPid, 15000))
+            string role = passThrough.Count > 0 ? passThrough[0] : "";
+            if (waitPid > 0 && !WaitForPid(waitPid, 6000))
             {
                 Log("launcher: wait-pid timeout, terminating " + waitPid);
-                try { using (var old = Process.GetProcessById(waitPid)) old.Kill(); } catch { }
+                try
+                {
+                    using (var old = Process.GetProcessById(waitPid))
+                    {
+                        old.Kill();
+                        if (!old.WaitForExit(10000))
+                        {
+                            Log("launcher: old process did not exit after termination pid=" + waitPid);
+                            return 4;
+                        }
+                    }
+                }
+                catch (ArgumentException) { }
+                catch (Exception ex) { Log("launcher: old process termination failed: " + ex.Message); return 4; }
             }
-            if (ExistingAppRunning(root))
+            if (ExistingAppRunning(root, role))
             {
                 Log("launcher: an existing instance is already running; nothing to do");
                 return 0;
             }
-            string role = passThrough.Count > 0 ? passThrough[0] : "";
             string current = ReadVersion(Path.Combine(root, "current.txt"));
             if (current == null) current = ReadVersion(Path.Combine(root, "version.txt"));
             string appPath = AppPath(root, current);
@@ -134,7 +147,7 @@ namespace NixLanConsoleLauncher
                     {
                         if (process.ExitCode == 3)
                         {
-                            if (ExistingAppRunning(root))
+                            if (ExistingAppRunning(root, role))
                             {
                                 Log("launcher: app reports an existing instance under this root; treating as ready");
                                 return true;
@@ -179,20 +192,27 @@ namespace NixLanConsoleLauncher
             return path;
         }
 
-        private static bool ExistingAppRunning(string root)
+        private static bool ExistingAppRunning(string root, string role)
         {
+            // A process left in versions/ can be exiting, hung, or belong to the other
+            // role. Only the instance which reported readiness for this role counts.
+            string[] ready;
+            try { ready = File.ReadAllText(ReadyFile, Encoding.UTF8).Trim().TrimStart('\uFEFF').Split('|'); }
+            catch { return false; }
+            if (ready.Length < 3 || !String.Equals(ready[2], role, StringComparison.Ordinal)) return false;
+            int readyPid;
+            if (!Int32.TryParse(ready[0], out readyPid)) return false;
             string prefix = Path.GetFullPath(Path.Combine(root, "versions")).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            foreach (Process process in Process.GetProcessesByName("ControlConsole"))
+            try
             {
-                try
+                using (Process process = Process.GetProcessById(readyPid))
                 {
+                    if (process.HasExited) return false;
                     string path = Path.GetFullPath(process.MainModule.FileName);
-                    if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+                    return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
                 }
-                catch { }
-                finally { process.Dispose(); }
             }
-            return false;
+            catch { return false; }
         }
 
         private static string ReadVersion(string path)

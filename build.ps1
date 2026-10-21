@@ -18,6 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw "C# compilation failed:$LASTEXITCODE" }
 # Stable launcher at the installation root.
 & $csc /nologo /target:winexe "/out:$(Join-Path $OutputDir 'ControlConsole.exe')" /reference:System.Windows.Forms.dll (Join-Path $PSScriptRoot 'src\Launcher.cs')
 if ($LASTEXITCODE -ne 0) { throw "Launcher compilation failed:$LASTEXITCODE" }
+Copy-Item (Join-Path $OutputDir 'ControlConsole.exe') (Join-Path $appDir 'Launcher.exe') -Force
 
 Copy-Item (Join-Path $PSScriptRoot 'version.txt'),(Join-Path $PSScriptRoot 'OpenHostTcpPort.ps1') -Destination $OutputDir -Force
 [IO.File]::WriteAllText((Join-Path $OutputDir 'current.txt'), $version, (New-Object System.Text.UTF8Encoding($false)))

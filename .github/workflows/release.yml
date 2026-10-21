@@ -25,12 +25,14 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "update-$version"
           New-Item -ItemType Directory -Path (Join-Path $stage "versions\$version") -Force | Out-Null
           Copy-Item "build\versions\$version\ControlConsole.exe" (Join-Path $stage "versions\$version\ControlConsole.exe") -Force
+          Copy-Item "build\versions\$version\Launcher.exe" (Join-Path $stage "versions\$version\Launcher.exe") -Force
           Copy-Item "build\version.txt" (Join-Path $stage "version.txt") -Force
           $archive = "ControlConsole-update-$version.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
           $check = Join-Path $env:RUNNER_TEMP "check-$version"
           Expand-Archive -LiteralPath $archive -DestinationPath $check -Force
           if (!(Test-Path (Join-Path $check "versions\$version\ControlConsole.exe"))) { throw 'Update package is missing the versioned application' }
+          if (!(Test-Path (Join-Path $check "versions\$version\Launcher.exe"))) { throw 'Update package is missing the launcher repair binary' }
           if (((Get-Content (Join-Path $check 'version.txt') -Raw).Trim()) -ne $version) { throw 'Update package version.txt mismatch' }
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $archive" -Encoding ascii

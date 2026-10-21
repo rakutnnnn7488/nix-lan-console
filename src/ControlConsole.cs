@@ -786,7 +786,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.8.0.1";
+        public const string Version = "1.8.0.2";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -1192,6 +1192,7 @@ namespace NixLanConsole
             string launcher = BuildInfo.LauncherPath;
             if (!File.Exists(launcher) || String.Equals(Path.GetFullPath(launcher), Path.GetFullPath(Application.ExecutablePath), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("当前安装不是 1.7 版本目录布局，请使用完整安装包升级。");
+            UpgradeLauncherIfBundled(launcher);
             string args = "--wait-pid " + Process.GetCurrentProcess().Id + " " + role;
             Process started = Process.Start(new ProcessStartInfo(launcher, args) { UseShellExecute = true, WorkingDirectory = BuildInfo.InstallDir });
             if (started == null) throw new InvalidOperationException("Windows 未能启动更新启动器。");
@@ -1199,6 +1200,24 @@ namespace NixLanConsole
             {
                 if (started.WaitForExit(1500)) throw new InvalidOperationException("更新启动器启动后立即退出，请查看 update.log。");
             }
+        }
+
+        private static void UpgradeLauncherIfBundled(string launcher)
+        {
+            string bundled = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "Launcher.exe");
+            if (!File.Exists(bundled)) return;
+            using (var sha = SHA256.Create())
+            using (var source = File.OpenRead(bundled))
+            using (var current = File.OpenRead(launcher))
+                if (sha.ComputeHash(source).SequenceEqual(sha.ComputeHash(current))) return;
+            string pending = launcher + ".pending-" + Process.GetCurrentProcess().Id;
+            try
+            {
+                File.Copy(bundled, pending, true);
+                File.Replace(pending, launcher, null, true);
+                StartupDiagnostics.Write("launcher upgraded from versioned package " + BuildInfo.Version);
+            }
+            finally { try { if (File.Exists(pending)) File.Delete(pending); } catch { } }
         }
 
         private static void RestoreCurrentVersion(string version)
