@@ -32,6 +32,7 @@ namespace NixLanConsole
         private static volatile bool ClockPlaying;
         private static volatile bool SourceProcessRunning;
         private static long LastClockTicks;
+        private static DateTime LastMonitorErrorLog = DateTime.MinValue;
         private static int Started;
         private static readonly object MediaGate = new object();
         private static string SongValue = "";
@@ -137,7 +138,9 @@ namespace NixLanConsole
                         string line;
                         while ((line = reader.ReadLine()) != null)
                         {
-                            if (line.Length > 65536) throw new InvalidDataException("Folia event line too large.");
+                            // Folia embeds artwork and stage settings in its config event. A real
+                            // playing session can exceed 64 KiB before the first clock event.
+                            if (line.Length > 1048576) throw new InvalidDataException("Folia event line too large.");
                             if (line.StartsWith("event:", StringComparison.Ordinal)) eventName = line.Substring(6).Trim();
                             else if (eventName == "config" && line.StartsWith("data:", StringComparison.Ordinal))
                             {
@@ -170,7 +173,14 @@ namespace NixLanConsole
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    if (DateTime.UtcNow - LastMonitorErrorLog > TimeSpan.FromMinutes(1))
+                    {
+                        LastMonitorErrorLog = DateTime.UtcNow;
+                        StartupDiagnostics.Write("Folia event monitor: " + ex.Message);
+                    }
+                }
                 ClockConnected = false; ClockPlaying = false;
                 SourceProcessRunning = FoliaIsRunning();
                 Thread.Sleep(3000);
