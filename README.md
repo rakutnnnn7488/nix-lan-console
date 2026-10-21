@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.7.4.4**，含 Folia 主机转发与副机歌词动效窗口；源码版本不代表远端已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.0.0**，加入游戏识别纠错箱、连接诊断和 Folia 歌曲信息卡；源码版本不代表远端已发布该版本。
 
 ## 安装布局
 
@@ -45,6 +45,9 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 主机 Folia 的设置中需启用“OBS 浏览器源”；当前版本不会改动 Folia 的配置。副机显示使用系统 Microsoft Edge 的渲染进程，但没有单独的浏览器窗口。
 - Folia 卡片仅显示控制台的游戏风格标题栏；Edge 应用模式自绘的“Folia OBS”标题条会从卡片可见区域裁掉。
 - 控制台桌面提供紫粉色像素音符 Folia 图标；图标由程序绘制，代码更新包即可带来。Folia 专用 Edge 配置禁用浏览器扩展。
+- 游戏记录设置中的「识别纠错箱」列出主机识别过的游戏进程和依据。可以确认、改名、忽略或恢复自动识别；纠正规则保存在副机，并随现有 TCP 控制包发给主机。纠正正在运行的游戏时，会保留该次记录的已运行时长。
+- 设置中的「连接诊断」显示主机地址、解析地址、往返耗时、最近连接错误和 Folia 状态，可一键复制信息排查。
+- Folia 卡片底部显示歌曲名、歌手、播放状态和封面（Folia 浏览器源提供可读取封面时）。歌曲数据来自主机 Folia 的原生 OBS 事件，封面通过现有授权转发端点送到副机；未取得封面时显示控制台像素图标。
 - 副机收到新版主机的 Folia 转发状态后，才会停用旧 `FoliaAutoDisplay` 全屏监听器，以免主机尚未更新时歌词中断；原启动快捷方式备份到 `%LOCALAPPDATA%\NixLanConsole\FoliaAutoDisplay-startup.backup.lnk`，旧工具文件保留。
 - 程序数据保存在 `%LOCALAPPDATA%\NixLanConsole`。升级前请先从托盘退出旧进程。
 

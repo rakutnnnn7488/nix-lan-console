@@ -23,6 +23,8 @@ namespace NixLanConsole
         }
 
         private sealed class FoliaClock { public string playerState = null; }
+        private sealed class FoliaSong { public string name = null; }
+        private sealed class FoliaMediaConfig { public FoliaSong song = null; public string songArtist = null; public string coverUrl = null; }
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         private static readonly object KeyGate = new object();
         private static string AccessKeyValue;
@@ -31,6 +33,16 @@ namespace NixLanConsole
         private static volatile bool SourceProcessRunning;
         private static long LastClockTicks;
         private static int Started;
+        private static readonly object MediaGate = new object();
+        private static string SongValue = "";
+        private static string ArtistValue = "";
+        private static string CoverUrlValue = "";
+        private static byte[] CoverBytes;
+        private static string CoverType;
+
+        internal static string Song { get { lock (MediaGate) return SongValue; } }
+        internal static string Artist { get { lock (MediaGate) return ArtistValue; } }
+        internal static bool HasCover { get { lock (MediaGate) return CoverBytes != null; } }
 
         internal static string AccessKey
         {
@@ -101,10 +113,12 @@ namespace NixLanConsole
             while (true)
             {
                 SourceProcessRunning = FoliaIsRunning();
+                if (!SourceProcessRunning) ClearMedia();
                 FoliaConfig config = ReadConfig();
                 if (config == null || !config.OBS_BROWSER_SOURCE_ENABLED || String.IsNullOrWhiteSpace(config.OBS_BROWSER_SOURCE_TOKEN))
                 {
                     ClockConnected = false; ClockPlaying = false;
+                    ClearMedia();
                     Thread.Sleep(3000);
                     continue;
                 }
@@ -125,6 +139,24 @@ namespace NixLanConsole
                         {
                             if (line.Length > 65536) throw new InvalidDataException("Folia event line too large.");
                             if (line.StartsWith("event:", StringComparison.Ordinal)) eventName = line.Substring(6).Trim();
+                            else if (eventName == "config" && line.StartsWith("data:", StringComparison.Ordinal))
+                            {
+                                FoliaMediaConfig media = Json.Deserialize<FoliaMediaConfig>(line.Substring(5));
+                                string song = media == null || media.song == null ? "" : media.song.name ?? "";
+                                string artist = media == null ? "" : media.songArtist ?? "";
+                                string cover = media == null ? "" : media.coverUrl ?? "";
+                                lock (MediaGate)
+                                {
+                                    SongValue = song.Length > 180 ? song.Substring(0, 180) : song;
+                                    ArtistValue = artist.Length > 180 ? artist.Substring(0, 180) : artist;
+                                    if (!String.Equals(cover, CoverUrlValue, StringComparison.Ordinal))
+                                    {
+                                        CoverUrlValue = cover; CoverBytes = null; CoverType = null;
+                                        string requested = cover;
+                                        ThreadPool.QueueUserWorkItem(delegate { LoadCover(requested); });
+                                    }
+                                }
+                            }
                             else if (eventName == "clock" && line.StartsWith("data:", StringComparison.Ordinal))
                             {
                                 FoliaClock clock = Json.Deserialize<FoliaClock>(line.Substring(5));
@@ -143,6 +175,47 @@ namespace NixLanConsole
                 SourceProcessRunning = FoliaIsRunning();
                 Thread.Sleep(3000);
             }
+        }
+
+        private static void ClearMedia()
+        {
+            lock (MediaGate) { SongValue = ""; ArtistValue = ""; CoverUrlValue = ""; CoverBytes = null; CoverType = null; }
+        }
+
+        private static void LoadCover(string url)
+        {
+            byte[] bytes = null;
+            string type = null;
+            try
+            {
+                if (url.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    int comma = url.IndexOf(',');
+                    if (comma > 0 && url.Substring(0, comma).IndexOf(";base64", StringComparison.OrdinalIgnoreCase) >= 0)
+                    { type = url.Substring(5, url.IndexOf(';') - 5); bytes = Convert.FromBase64String(url.Substring(comma + 1)); }
+                }
+                else
+                {
+                    Uri uri;
+                    if (Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"))
+                    {
+                        var request = (HttpWebRequest)WebRequest.Create(uri); request.Timeout = 5000; request.ReadWriteTimeout = 5000;
+                        using (var response = (HttpWebResponse)request.GetResponse())
+                        using (var stream = response.GetResponseStream())
+                        using (var memory = new MemoryStream())
+                        {
+                            type = response.ContentType;
+                            var buffer = new byte[8192]; int read;
+                            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                            { if (memory.Length + read > 2097152) throw new InvalidDataException("Folia cover exceeds 2 MB."); memory.Write(buffer, 0, read); }
+                            bytes = memory.ToArray();
+                        }
+                    }
+                }
+                if (bytes == null || bytes.Length == 0 || bytes.Length > 2097152 || String.IsNullOrWhiteSpace(type) || !type.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return;
+                lock (MediaGate) if (String.Equals(url, CoverUrlValue, StringComparison.Ordinal)) { CoverBytes = bytes; CoverType = type.Split(';')[0]; }
+            }
+            catch (Exception ex) { StartupDiagnostics.Write("Folia cover: " + ex.Message); }
         }
 
         internal static void ServeHttp(TcpClient client, NetworkStream stream, StreamReader reader, string requestLine)
@@ -180,7 +253,16 @@ namespace NixLanConsole
                 }
                 if (uri.AbsolutePath == "/playback")
                 {
-                    SendText(stream, 200, "OK", "{\"connected\":" + (Connected ? "true" : "false") + ",\"playing\":" + (Playing ? "true" : "false") + ",\"sourceRunning\":" + (SourceRunning ? "true" : "false") + "}", setCookie, "application/json; charset=utf-8");
+                    SendText(stream, 200, "OK", Json.Serialize(new { connected = Connected, playing = Playing, sourceRunning = SourceRunning, song = Song, artist = Artist, cover = HasCover }), setCookie, "application/json; charset=utf-8");
+                    return;
+                }
+                if (uri.AbsolutePath == "/media-cover")
+                {
+                    byte[] cover; string type;
+                    lock (MediaGate) { cover = CoverBytes; type = CoverType; }
+                    if (cover == null) { SendText(stream, 404, "Not Found", "Cover unavailable.", setCookie); return; }
+                    WriteAscii(stream, "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nCache-Control: no-store\r\nContent-Length: " + cover.Length + "\r\nConnection: close\r\n\r\n");
+                    stream.Write(cover, 0, cover.Length);
                     return;
                 }
                 if (uri.AbsolutePath == "/obs/health") { SendText(stream, 403, "Forbidden", "Forbidden.", null); return; }

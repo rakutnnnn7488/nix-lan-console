@@ -276,6 +276,75 @@ namespace NixLanConsole
         }
     }
 
+    internal sealed class NativeGameReviewDialog : NativeDialog
+    {
+        private readonly DataGridView Items;
+        private readonly TextBox CorrectedTitle;
+        private readonly CheckBox ShowReviewed;
+
+        internal NativeGameReviewDialog() : base("游戏识别纠错箱", 1040, 640)
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            Padding = new Padding(4);
+            BackColor = Color.FromArgb(64, 48, 150);
+            var body = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 235, 250) };
+            var header = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = Color.FromArgb(226, 186, 233) };
+            var heading = new Label { Dock = DockStyle.Fill, Text = "■ 游戏识别纠错箱  /  GAME REVIEW", TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) };
+            var close = MakeButton("×"); close.AutoSize = false; close.Size = new Size(32, 30); close.Dock = DockStyle.Right; close.Click += delegate { Close(); };
+            header.Controls.Add(heading); header.Controls.Add(close);
+            Point origin = Point.Empty;
+            heading.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) origin = e.Location; };
+            heading.MouseMove += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) Location = new Point(Left + e.X - origin.X, Top + e.Y - origin.Y); };
+            var hint = new Label { Dock = DockStyle.Top, Height = 54, Padding = new Padding(14, 10, 0, 0), Text = "这里列出主机识别过的游戏进程。确认一次后不再待审；纠正或忽略会在下次主机采样生效。" };
+            Items = MakeGrid(); Items.Columns.Add("game", "识别游戏"); Items.Columns.Add("process", "进程"); Items.Columns.Add("source", "依据"); Items.Columns.Add("path", "程序路径"); Items.Columns.Add("seen", "最近发现"); Items.Columns.Add("status", "状态");
+            Items.Columns["path"].FillWeight = 220; Items.Columns["game"].FillWeight = 130;
+            Items.SelectionChanged += delegate { if (Items.CurrentRow != null && Items.CurrentRow.Tag is GameDetection) CorrectedTitle.Text = ((GameDetection)Items.CurrentRow.Tag).game; };
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 120, Padding = new Padding(12, 6, 0, 0), BackColor = Color.FromArgb(248, 235, 250) };
+            ShowReviewed = new CheckBox { Text = "显示已确认", Width = 125, Height = 32 }; ShowReviewed.CheckedChanged += delegate { RefreshItems(); };
+            var refresh = MakeButton("刷新"); refresh.Click += delegate { RefreshItems(); };
+            actions.Controls.Add(ShowReviewed); actions.Controls.Add(refresh);
+            actions.SetFlowBreak(refresh, true);
+            actions.Controls.Add(new Label { Text = "正确游戏名：", Width = 100, Height = 34, TextAlign = ContentAlignment.MiddleLeft });
+            CorrectedTitle = new TextBox { Width = 240 }; actions.Controls.Add(CorrectedTitle);
+            var confirm = MakeButton("确认识别"); confirm.Click += delegate { Apply(false, false); };
+            var correct = MakeButton("改成此名称"); correct.Click += delegate { Apply(false, true); };
+            var ignore = MakeButton("忽略此进程"); ignore.Click += delegate { Apply(true, false); };
+            var reset = MakeButton("恢复自动识别"); reset.Click += delegate { ResetSelected(); };
+            actions.Controls.Add(confirm); actions.Controls.Add(correct); actions.Controls.Add(ignore); actions.Controls.Add(reset);
+            body.Controls.Add(Items); body.Controls.Add(actions); body.Controls.Add(hint); body.Controls.Add(header); Controls.Add(body);
+            RefreshItems();
+        }
+
+        private void RefreshItems()
+        {
+            var state = DisplayServer.Snapshot();
+            var reviewed = new HashSet<string>(state.reviewedGameKeys ?? new string[0], StringComparer.OrdinalIgnoreCase);
+            Items.Rows.Clear();
+            foreach (GameDetection item in state.reviewItems ?? new GameDetection[0])
+            {
+                if (item == null || (!ShowReviewed.Checked && reviewed.Contains(item.key))) continue;
+                int index = Items.Rows.Add(item.game, item.process, item.source, item.key, item.seen > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(item.seen).LocalDateTime.ToString("MM-dd HH:mm") : "—", reviewed.Contains(item.key) ? "已确认" : "待确认");
+                Items.Rows[index].Tag = item;
+            }
+        }
+
+        private void Apply(bool ignore, bool rename)
+        {
+            var item = Items.CurrentRow == null ? null : Items.CurrentRow.Tag as GameDetection;
+            if (item == null) { MessageBox.Show(this, "请先选择一条进程记录。", "游戏识别"); return; }
+            string title = rename ? CorrectedTitle.Text.Trim() : item.game;
+            try { DisplayServer.ReviewDetection(item.key, title, ignore); RefreshItems(); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+        private void ResetSelected()
+        {
+            var item = Items.CurrentRow == null ? null : Items.CurrentRow.Tag as GameDetection;
+            if (item == null) { MessageBox.Show(this, "请先选择一条进程记录。", "游戏识别"); return; }
+            try { DisplayServer.ResetGameReview(item.key); RefreshItems(); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "恢复失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+    }
+
     internal sealed class NativeSettingsDialog : NativeDialog
     {
         private readonly CheckedListBox Games;
@@ -285,6 +354,7 @@ namespace NixLanConsole
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
         private readonly Button InstallButton;
+        private readonly Label DiagnosisText;
         private readonly System.Windows.Forms.Timer RefreshTimer;
         private DashboardState State;
 
@@ -301,7 +371,8 @@ namespace NixLanConsole
             var gameActions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 55, Padding = new Padding(8, 7, 0, 0) };
             var save = MakeButton("保存游戏设置"); save.Click += delegate { SaveGames(); };
             var purge = MakeButton("清除选中游戏历史"); purge.Click += delegate { PurgeSelected(); };
-            gameActions.Controls.Add(save); gameActions.Controls.Add(purge);
+            var review = MakeButton("识别纠错箱"); review.Click += delegate { using (var dialog = new NativeGameReviewDialog()) dialog.ShowDialog(this); };
+            gameActions.Controls.Add(save); gameActions.Controls.Add(purge); gameActions.Controls.Add(review);
             gamesTab.Controls.Add(Games); gamesTab.Controls.Add(gameTop); gamesTab.Controls.Add(gameActions);
 
             var versionTab = new TabPage("软件版本");
@@ -342,10 +413,38 @@ namespace NixLanConsole
             });
             foliaTab.Controls.Add(foliaLayout);
 
-            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); Controls.Add(tabs);
-            RefreshTimer = new System.Windows.Forms.Timer { Interval = 500 }; RefreshTimer.Tick += delegate { RefreshProgress(); }; RefreshTimer.Start();
+            var diagnosisTab = new TabPage("连接诊断");
+            var diagnosisLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20) };
+            DiagnosisText = new Label { Width = 690, Height = 390, Font = new Font("Microsoft YaHei UI", 11F), ForeColor = Ink };
+            diagnosisLayout.Controls.Add(DiagnosisText);
+            var copyDiagnosis = MakeButton("复制诊断信息");
+            copyDiagnosis.Click += delegate { try { Clipboard.SetText(DiagnosisText.Text); MessageBox.Show(this, "诊断信息已复制，可直接发给我排查。", "连接诊断"); } catch (Exception ex) { MessageBox.Show(this, ex.Message, "复制失败"); } };
+            diagnosisLayout.Controls.Add(copyDiagnosis); diagnosisTab.Controls.Add(diagnosisLayout);
+
+            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); tabs.TabPages.Add(diagnosisTab); Controls.Add(tabs);
+            RefreshTimer = new System.Windows.Forms.Timer { Interval = 500 }; RefreshTimer.Tick += delegate { RefreshProgress(); if (tabs.SelectedTab == diagnosisTab) RefreshDiagnostics(); }; RefreshTimer.Start();
             FormClosed += delegate { RefreshTimer.Stop(); RefreshTimer.Dispose(); };
             RefreshProgress();
+            RefreshDiagnostics();
+        }
+        private void RefreshDiagnostics()
+        {
+            var state = DisplayServer.Snapshot();
+            Func<long, string> stamp = value => value <= 0 ? "—" : DateTimeOffset.FromUnixTimeMilliseconds(value).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+            DiagnosisText.Text = "连接状态：" + (state.online ? "主机在线" : "主机离线") + "\r\n" +
+                "主机地址：" + (state.hostAddress ?? "—") + ":46702\r\n" +
+                "解析地址：" + (String.IsNullOrWhiteSpace(state.resolvedAddress) ? "—" : state.resolvedAddress) + "\r\n" +
+                "往返耗时：" + (state.connectionRttMs < 0 ? "—" : state.connectionRttMs + " ms") + "\r\n" +
+                "最近状态包：" + (state.packetAgeMs < 0 ? "—" : state.packetAgeMs + " ms 前") + "\r\n" +
+                "最近尝试：" + stamp(state.connectionAttemptUtc) + "\r\n" +
+                "最近成功：" + stamp(state.connectionSuccessUtc) + "\r\n" +
+                "最近错误：" + (String.IsNullOrWhiteSpace(state.connectionError) ? "无" : state.connectionError) + "\r\n\r\n" +
+                "主机版本：" + (state.hostVersion ?? "—") + "\r\n" +
+                "Folia 进程：" + (state.foliaRunning ? "运行中" : "未运行") + "\r\n" +
+                "Folia 浏览器源：" + (state.foliaConnected ? "已连接" : "未连接") + "\r\n" +
+                "播放状态：" + (state.foliaPlaying ? "播放中" : "未播放") + "\r\n" +
+                "当前歌曲：" + (String.IsNullOrWhiteSpace(state.foliaSong) ? "—" : state.foliaSong) + "\r\n\r\n" +
+                "建议：" + (!state.online ? "检查主机程序、地址与 TCP 46702 防火墙规则。" : state.foliaRunning && !state.foliaConnected ? "在主机 Folia 中开启 OBS 浏览器源。" : "连接正常，可在异常发生时复制此页信息。 ");
         }
         private void SaveGames()
         {

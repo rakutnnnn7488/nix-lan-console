@@ -46,6 +46,11 @@ namespace NixLanConsole
         private readonly Panel FoliaCard;
         private readonly Panel FoliaSurface;
         private readonly FoliaWindowHost FoliaHost;
+        private readonly PictureBox FoliaCover;
+        private readonly Label FoliaSongLabel;
+        private readonly Label FoliaArtistLabel;
+        private readonly Image FoliaDefaultCover;
+        private string FoliaCoverIdentity = "";
         private readonly Panel TransitionOverlay;
         private readonly Timer RefreshTimer;
         private readonly Timer AnimationTimer;
@@ -216,7 +221,15 @@ namespace NixLanConsole
             LiveCard.Controls.Add(LiveCanvas); LiveCard.Visible = false; Desktop.Controls.Add(LiveCard);
             FoliaCard = Card("Folia 歌词", 1000);
             FoliaSurface = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(27, 20, 43) };
-            FoliaCard.Controls.Add(FoliaSurface); FoliaCard.Visible = false; Desktop.Controls.Add(FoliaCard);
+            var foliaInfo = new Panel { Dock = DockStyle.Bottom, Height = 82, BackColor = Color.FromArgb(232, 204, 242), Padding = new Padding(8) };
+            FoliaDefaultCover = FoliaPixelIcon.Create();
+            FoliaCover = new PictureBox { Dock = DockStyle.Left, Width = 66, SizeMode = PictureBoxSizeMode.Zoom, Image = FoliaDefaultCover, BackColor = Color.FromArgb(86, 62, 150) };
+            var foliaText = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 3, 0, 0) };
+            FoliaSongLabel = new Label { Dock = DockStyle.Top, Height = 35, Text = "等待主机播放音乐", AutoEllipsis = true, Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold), ForeColor = Color.FromArgb(61, 40, 139) };
+            FoliaArtistLabel = new Label { Dock = DockStyle.Top, Height = 25, Text = "Folia", AutoEllipsis = true, ForeColor = Color.FromArgb(101, 76, 156) };
+            foliaText.Controls.Add(FoliaArtistLabel); foliaText.Controls.Add(FoliaSongLabel);
+            foliaInfo.Controls.Add(foliaText); foliaInfo.Controls.Add(FoliaCover);
+            FoliaCard.Controls.Add(FoliaSurface); FoliaCard.Controls.Add(foliaInfo); FoliaCard.Visible = false; Desktop.Controls.Add(FoliaCard);
             FoliaHost = new FoliaWindowHost(FoliaSurface);
             TransitionOverlay = new BufferedPanel { BackColor = Color.FromArgb(250, 235, 250), Visible = false };
             TransitionOverlay.Paint += PaintTransformation;
@@ -299,6 +312,8 @@ namespace NixLanConsole
             {
                 RefreshTimer.Stop(); AnimationTimer.Stop();
                 FoliaHost.Dispose();
+                if (FoliaCover.Image != null && FoliaCover.Image != FoliaDefaultCover) FoliaCover.Image.Dispose();
+                FoliaDefaultCover.Dispose();
                 if (CharacterBackground != null) CharacterBackground.Dispose();
                 if (SideBackground != null) SideBackground.Dispose();
                 if (DesktopBackground != null) DesktopBackground.Dispose();
@@ -626,6 +641,7 @@ namespace NixLanConsole
             if (!playing && !kangel) { Transforming = false; TransitionOverlay.Visible = false; LiveCard.Visible = false; LiveTab.Visible = false; }
             PreviousGameRunning = playing;
             bool foliaPlaying = state.online && state.foliaPlaying && !String.IsNullOrWhiteSpace(state.foliaKey);
+            RefreshFoliaMedia(state);
             if (foliaPlaying && !PreviousFoliaPlaying) OpenFolia(false);
             PreviousFoliaPlaying = foliaPlaying;
             if (state.online && !state.foliaRunning && FoliaCard.Visible)
@@ -648,6 +664,36 @@ namespace NixLanConsole
                 "本次游戏结束啦 ♡\r\n" + latestFinished.game + "  ·  " + FormatDuration(latestFinished.end - latestFinished.start) +
                 "\r\n点击查看游玩回顾与硬件曲线 ▶";
             LayoutRecordMessages(GameList.Parent);
+        }
+
+        private void RefreshFoliaMedia(DashboardState state)
+        {
+            FoliaSongLabel.Text = String.IsNullOrWhiteSpace(state.foliaSong) ? "等待主机播放音乐" : state.foliaSong;
+            FoliaArtistLabel.Text = String.IsNullOrWhiteSpace(state.foliaArtist) ? (state.foliaPlaying ? "Folia 正在播放" : "Folia") : state.foliaArtist;
+            string identity = (state.foliaSong ?? "") + "\n" + (state.foliaArtist ?? "") + "\n" + state.foliaCover + "\n" + state.hostAddress;
+            if (identity == FoliaCoverIdentity) return;
+            FoliaCoverIdentity = identity;
+            if (FoliaCover.Image != FoliaDefaultCover) { Image previous = FoliaCover.Image; FoliaCover.Image = FoliaDefaultCover; if (previous != null) previous.Dispose(); }
+            if (!state.online || !state.foliaCover || String.IsNullOrWhiteSpace(state.foliaKey)) return;
+            string url = "http://" + state.hostAddress + ":46702/media-cover?key=" + Uri.EscapeDataString(state.foliaKey);
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    byte[] bytes;
+                    using (var client = new System.Net.WebClient()) bytes = client.DownloadData(url);
+                    if (bytes.Length > 2097152) return;
+                    Image loaded;
+                    using (var memory = new MemoryStream(bytes)) using (var decoded = Image.FromStream(memory)) loaded = new Bitmap(decoded);
+                    if (IsDisposed || !IsHandleCreated) { loaded.Dispose(); return; }
+                    BeginInvoke((Action)delegate
+                    {
+                        if (IsDisposed || FoliaCoverIdentity != identity) { loaded.Dispose(); return; }
+                        FoliaCover.Image = loaded;
+                    });
+                }
+                catch (Exception ex) { StartupDiagnostics.Write("Folia cover display: " + ex.Message); }
+            });
         }
 
         private void ShowLatestGameRecap()
