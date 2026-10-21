@@ -144,7 +144,7 @@ namespace NixLanConsole
             AddDesktopIcon("吃药", "icon_desktop_okusuri.png", 50, 415, delegate { FocusCard(StatsCard); });
             AddDesktopIcon("因特网", "icon_desktop_internet.png", 50, 535, delegate { OpenSettings(); });
             AddDesktopIcon("出门", "icon_desktop_odekake.png", 50, 655, delegate { Hide(); });
-            AddDesktopIcon("Folia", "", 50, 775, delegate { OpenFolia(); });
+            AddDesktopIcon("Folia", "icon_desktop_folia.png", 50, 775, delegate { OpenFolia(); });
 
             CharacterCard = Card("Webcam", 716);
             CharacterState = new Label { Text = "糖糖 · 日常待机 ♡" };
@@ -761,6 +761,7 @@ namespace NixLanConsole
                 if (File.Exists(Path.Combine(assets, "footer_original.png"))) TaskbarBackground = LoadDetachedImage(Path.Combine(assets, "footer_original.png"));
                 foreach (string name in new[] { "icon_desktop_youtube.png", "icon_desktop_asobu.png", "icon_desktop_neru.png", "icon_desktop_okusuri.png", "icon_desktop_internet.png", "icon_desktop_odekake.png" })
                     if (File.Exists(Path.Combine(assets, name))) DesktopIcons[name] = LoadDetachedImage(Path.Combine(assets, name));
+                DesktopIcons["icon_desktop_folia.png"] = FoliaPixelIcon.Create();
                 string[] metricIconNames = { "icon_status_follower.png", "icon_status_stress.png", "icon_status_love.png", "icon_status_yami.png" };
                 for (int i = 0; i < metricIconNames.Length; i++)
                 {

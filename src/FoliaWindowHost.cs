@@ -88,7 +88,7 @@ namespace NixLanConsole
             Placeholder.Text = "正在连接主机 Folia 歌词动效…";
             Placeholder.Visible = true;
             string arguments = "--app=\"" + url + "\" --user-data-dir=\"" + ProfilePath +
-                "\" --no-first-run --disable-features=Translate,msEdgeTranslate --window-size=1000,700 --window-position=-20000,-20000";
+                "\" --no-first-run --disable-extensions --disable-features=Translate,msEdgeTranslate --window-size=1000,700 --window-position=-20000,-20000";
             StartedProcess = Process.Start(new ProcessStartInfo(edge, arguments)
             {
                 UseShellExecute = false,
