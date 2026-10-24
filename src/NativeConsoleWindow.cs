@@ -299,7 +299,8 @@ namespace NixLanConsole
             AnimationTimer = new Timer { Interval = 83 };
             AnimationTimer.Tick += delegate
             {
-                if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >= CurrentClip.Duration) SelectRoleClip(CurrentScene);
+                if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >=
+                    Math.Max(CurrentClip.Duration, IsKangel ? 2.5 : 0)) SelectRoleClip(CurrentScene);
                 Image frame = CurrentFrame();
                 if (!Object.ReferenceEquals(frame, DisplayedFrame)) { DisplayedFrame = frame; CharacterCanvas.Invalidate(); }
                 if (Transforming)

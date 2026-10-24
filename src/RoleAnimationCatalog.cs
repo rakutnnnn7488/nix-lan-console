@@ -25,13 +25,21 @@ namespace NixLanConsole
         KangelGameFever,
         KangelBright,
         KangelCute,
-        KangelGaoo
+        KangelGaoo,
+        KangelSharp,
+        KangelCool,
+        KangelCozy,
+        KangelOtaku,
+        KangelCalm,
+        KangelFever,
+        KangelReaction,
+        KangelAfterGame
     }
 
     internal static class RoleAnimationCatalog
     {
-        // The local game asset manifest contains seven variants of each Ame idle
-        // family and five Kangel character clips. Unknown entries are excluded.
+        // The local manifest contains seven variants of each Ame idle family and
+        // a curated set of full-size Kangel character clips. Unknown entries are excluded.
         internal static RoleAnimationCategory Classify(string name)
         {
             if (String.IsNullOrEmpty(name)) return RoleAnimationCategory.Unknown;
@@ -47,19 +55,35 @@ namespace NixLanConsole
                     Char.ToLowerInvariant(name[name.Length - 1]) >= 'a' && Char.ToLowerInvariant(name[name.Length - 1]) <= 'g')
                     return ameCategories[i];
             }
-            switch (name.ToLowerInvariant())
+            string clip = name.ToLowerInvariant();
+            if (clip == "stream_cho_game_fever") return RoleAnimationCategory.KangelGameFever;
+            string[] approvedFamilies = { "akaruku", "dokuzetsu", "game", "kakkoyoku", "kawaiku", "kobiru", "otaku", "su" };
+            foreach (string family in approvedFamilies)
+            {
+                if (clip == "stream_cho_" + family + "_fever") return RoleAnimationCategory.KangelFever;
+                if (clip == "stream_cho_" + family + "_superchat") return RoleAnimationCategory.KangelReaction;
+                if (clip == "stream_cho_" + family + "_win_stop") return RoleAnimationCategory.KangelAfterGame;
+            }
+            switch (clip)
             {
                 case "stream_cho_game": return RoleAnimationCategory.KangelGame;
                 case "stream_cho_game_fever": return RoleAnimationCategory.KangelGameFever;
                 case "stream_cho_akaruku": return RoleAnimationCategory.KangelBright;
                 case "stream_cho_kawaiku": return RoleAnimationCategory.KangelCute;
                 case "stream_cho_gaoo": return RoleAnimationCategory.KangelGaoo;
+                case "stream_cho_dokuzetsu": return RoleAnimationCategory.KangelSharp;
+                case "stream_cho_kakkoyoku": return RoleAnimationCategory.KangelCool;
+                case "stream_cho_kobiru": return RoleAnimationCategory.KangelCozy;
+                case "stream_cho_otaku":
+                case "stream_cho_otaku2": return RoleAnimationCategory.KangelOtaku;
+                case "stream_cho_su":
+                case "stream_cho_su_smile": return RoleAnimationCategory.KangelCalm;
                 default: return RoleAnimationCategory.Unknown;
             }
         }
 
-        // Weights are per clip. Seven Ame variants therefore share the family
-        // probability, while each Kangel clip has its own deliberate frequency.
+        // Weights are per clip. Rare reactions remain short interludes; longer
+        // character performances form the main rotation.
         internal static int Weight(RoleScene scene, RoleAnimationCategory category)
         {
             switch (scene)
@@ -73,18 +97,26 @@ namespace NixLanConsole
                 case RoleScene.HostOffline:
                     return category == RoleAnimationCategory.AmeAnxiety ? 7 : category == RoleAnimationCategory.AmeIraira ? 3 : 0;
                 case RoleScene.GameOpening:
-                    return category == RoleAnimationCategory.KangelCute ? 7 : category == RoleAnimationCategory.KangelBright ? 3 : 0;
+                    return category == RoleAnimationCategory.KangelCute ? 5 :
+                        category == RoleAnimationCategory.KangelBright ? 4 :
+                        category == RoleAnimationCategory.KangelCool || category == RoleAnimationCategory.KangelCozy ? 2 : 0;
                 case RoleScene.LiveGaming:
-                    return category == RoleAnimationCategory.KangelGame ? 7 :
-                        category == RoleAnimationCategory.KangelBright ? 2 :
-                        category == RoleAnimationCategory.KangelCute || category == RoleAnimationCategory.KangelGaoo ? 1 : 0;
+                    return category == RoleAnimationCategory.KangelGame ? 6 :
+                        category == RoleAnimationCategory.KangelBright || category == RoleAnimationCategory.KangelCute ? 4 :
+                        category == RoleAnimationCategory.KangelSharp || category == RoleAnimationCategory.KangelCool ||
+                            category == RoleAnimationCategory.KangelCozy || category == RoleAnimationCategory.KangelOtaku ||
+                            category == RoleAnimationCategory.KangelCalm ? 3 :
+                        category == RoleAnimationCategory.KangelReaction ? 1 :
+                        category == RoleAnimationCategory.KangelGaoo ? 2 : 0;
                 case RoleScene.LiveGamingFever:
-                    return category == RoleAnimationCategory.KangelGameFever ? 6 :
+                    return category == RoleAnimationCategory.KangelGameFever ? 8 :
+                        category == RoleAnimationCategory.KangelFever ? 3 :
                         category == RoleAnimationCategory.KangelGame ? 3 :
-                        category == RoleAnimationCategory.KangelGaoo ? 1 : 0;
+                        category == RoleAnimationCategory.KangelReaction || category == RoleAnimationCategory.KangelGaoo ? 1 : 0;
                 case RoleScene.AfterGame:
-                    return category == RoleAnimationCategory.KangelBright ? 5 :
-                        category == RoleAnimationCategory.KangelCute ? 4 :
+                    return category == RoleAnimationCategory.KangelAfterGame ? 3 :
+                        category == RoleAnimationCategory.KangelBright || category == RoleAnimationCategory.KangelCute ? 4 :
+                        category == RoleAnimationCategory.KangelCalm || category == RoleAnimationCategory.KangelCozy ? 3 :
                         category == RoleAnimationCategory.KangelGaoo ? 1 : 0;
                 default: return 0;
             }
