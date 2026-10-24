@@ -91,7 +91,14 @@ namespace NixLanConsoleLauncher
                 MessageBox.Show("安装目录中找不到可启动的程序版本。请使用完整安装包修复。", "Nix LAN Console", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 2;
             }
-            if (StartAndVerify(root, appPath, current, role, passThrough)) return 0;
+            string assetBackup;
+            bool assetsReady = ApplyPendingAssets(root, current, out assetBackup);
+            if (assetsReady && StartAndVerify(root, appPath, current, role, passThrough))
+            {
+                CompletePendingAssets(root, assetBackup);
+                return 0;
+            }
+            RollbackPendingAssets(root, assetBackup);
             WriteFailed(current);
 
             string previous = ReadVersion(Path.Combine(root, "previous.txt"));
@@ -109,6 +116,60 @@ namespace NixLanConsoleLauncher
             Log("launcher: rollback failed; no usable version");
             MessageBox.Show("新版本没有成功启动，旧版本也无法启动。\r\n请使用完整安装包修复，详情见 update.log。", "Nix LAN Console", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 3;
+        }
+
+        private static bool ApplyPendingAssets(string root, string version, out string backup)
+        {
+            backup = null;
+            string marker = Path.Combine(root, "asset-pending.txt");
+            if (!File.Exists(marker)) return true;
+            string stage = null;
+            string current = Path.Combine(root, "game-assets");
+            try
+            {
+                string[] parts = File.ReadAllText(marker, Encoding.UTF8).Trim().TrimStart('\uFEFF').Split('|');
+                if (parts.Length != 2 || parts[0] != version || !Regex.IsMatch(parts[1], @"\Agame-assets-stage-[0-9a-f]{32}\z"))
+                    throw new InvalidDataException("Pending asset marker is invalid.");
+                stage = Path.GetFullPath(Path.Combine(root, parts[1]));
+                string prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!stage.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(stage))
+                    throw new InvalidDataException("Pending asset stage is missing.");
+                backup = Path.Combine(root, "game-assets-backup-" + Guid.NewGuid().ToString("N"));
+                if (Directory.Exists(current)) Directory.Move(current, backup);
+                Directory.Move(stage, current);
+                Log("launcher: asset bundle switched for " + version);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("launcher: asset switch failed: " + ex.Message);
+                try { if (backup != null && Directory.Exists(backup) && !Directory.Exists(current)) Directory.Move(backup, current); } catch (Exception restore) { Log("launcher: asset restore failed: " + restore.Message); }
+                backup = null;
+                try { File.Delete(marker); } catch { }
+                return false;
+            }
+        }
+
+        private static void CompletePendingAssets(string root, string backup)
+        {
+            try { if (backup != null && Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) { Log("launcher: old asset cleanup: " + ex.Message); }
+            try { File.Delete(Path.Combine(root, "asset-pending.txt")); } catch { }
+        }
+
+        private static void RollbackPendingAssets(string root, string backup)
+        {
+            if (backup != null && Directory.Exists(backup))
+            {
+                try
+                {
+                    string current = Path.Combine(root, "game-assets");
+                    if (Directory.Exists(current)) Directory.Delete(current, true);
+                    Directory.Move(backup, current);
+                    Log("launcher: restored previous asset bundle");
+                }
+                catch (Exception ex) { Log("launcher: asset rollback failed: " + ex.Message); }
+            }
+            try { File.Delete(Path.Combine(root, "asset-pending.txt")); } catch { }
         }
 
         private static bool StartAndVerify(string root, string appPath, string version, string role, List<string> args)

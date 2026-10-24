@@ -359,7 +359,9 @@ namespace NixLanConsole
                         string line = reader.ReadLine();
                         if (line != null && line.StartsWith("GET /", StringComparison.Ordinal))
                         {
-                            FoliaLanRelay.ServeHttp(client, stream, reader, line);
+                            if (line.StartsWith("GET /asset-bundle?", StringComparison.Ordinal))
+                                AssetBundleSync.Serve(client, stream, reader, line);
+                            else FoliaLanRelay.ServeHttp(client, stream, reader, line);
                             return;
                         }
                         if (String.IsNullOrEmpty(line) || line.Length > 65536) return;
@@ -786,7 +788,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.8.2.0";
+        public const string Version = "1.8.3.0";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -912,14 +914,39 @@ namespace NixLanConsole
                     return;
                 }
                 SetUpdateProgress("preparing", 96, available.ToString(), "更新包已下载，正在校验并准备安装…");
-                attempted = available;
                 string updateDir = Path.Combine(DataDir, "updates"); Directory.CreateDirectory(updateDir);
                 string localZip = Path.Combine(updateDir, "pending-" + available + "-" + Guid.NewGuid().ToString("N") + ".zip");
                 File.Copy(sourceZip, localZip, false);
                 string previousVersion = null;
+                string assetStage = null;
+                string assetPending = Path.Combine(BuildInfo.InstallDir, "asset-pending.txt");
                 try
                 {
+                    if (!hostMode && !AssetBundleSync.HasCurrentAssets(BuildInfo.InstallDir))
+                    {
+                        string address, key, hostVersion;
+                        lock (Gate)
+                        {
+                            address = Settings.hostAddress;
+                            key = Last == null ? null : Last.foliaKey;
+                            hostVersion = Last == null ? null : Last.version;
+                        }
+                        if (!String.Equals(hostVersion, available.ToString(), StringComparison.Ordinal))
+                            throw new IOException("主机尚未更新到 " + available + "，等待主机更新后再同步素材。");
+                        SetUpdateProgress("downloading", 0, available.ToString(), "正在从主机同步角色素材…");
+                        string assetZip = AssetBundleSync.Download(address, key, available.ToString(), delegate(int percent, string message)
+                        { SetUpdateProgress("downloading", percent, available.ToString(), message); });
+                        try
+                        {
+                            SetUpdateProgress("installing", 96, available.ToString(), "正在校验并安装角色素材…");
+                            assetStage = AssetBundleSync.StageInstall(assetZip, BuildInfo.InstallDir);
+                        }
+                        finally { try { File.Delete(assetZip); } catch { } }
+                    }
+                    attempted = available;
                     previousVersion = InstallVersionPackage(localZip, available.ToString());
+                    if (assetStage != null)
+                        File.WriteAllText(assetPending, available + "|" + Path.GetFileName(assetStage), Encoding.UTF8);
                     SetUpdateProgress("installing", 99, available.ToString(), "更新已就绪，正在切换到新版本…");
                     try { File.Delete(localZip); } catch { }
                     RestartThroughLauncher(hostMode ? "--sensor" : "--display");
@@ -928,6 +955,8 @@ namespace NixLanConsole
                 catch
                 {
                     RestoreCurrentVersion(previousVersion);
+                    try { if (assetStage != null && File.Exists(assetPending)) File.Delete(assetPending); } catch { }
+                    try { if (assetStage != null && Directory.Exists(assetStage)) Directory.Delete(assetStage, true); } catch { }
                     throw;
                 }
                 finally { try { if (File.Exists(localZip)) File.Delete(localZip); } catch { } }
