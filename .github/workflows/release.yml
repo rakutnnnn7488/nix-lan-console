@@ -43,7 +43,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v$env:RELEASE_VERSION"
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Increase the version before publishing." }
-          gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" "ControlConsole-update-$env:RELEASE_VERSION.zip.sha256" --title $tag --notes 'Application update. The secondary PC securely syncs missing local game assets from its connected host over LAN; native game assets are not published to GitHub.' --target $env:GITHUB_SHA
+          $notes = 'Application update. The secondary PC securely syncs missing local game assets from its connected host over LAN; native game assets are not published to GitHub.'
+          $publishedTarget = gh release view $tag --json targetCommitish --jq '.targetCommitish' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            git fetch origin $publishedTarget --depth=1
+            if ($LASTEXITCODE -ne 0) { throw "Could not compare existing release $tag." }
+            git diff --quiet $publishedTarget $env:GITHUB_SHA -- src build.ps1 version.txt
+            if ($LASTEXITCODE -ne 0) { throw "Release $tag already exists for different application code. Increase the version." }
+            gh release edit $tag --notes $notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Write-Output "Release $tag already contains this application code; updated notes only."
+            exit 0
+          }
+          gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" "ControlConsole-update-$env:RELEASE_VERSION.zip.sha256" --title $tag --notes $notes --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
