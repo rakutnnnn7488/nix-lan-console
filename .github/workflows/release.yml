@@ -45,5 +45,5 @@ jobs:
           $tag = "v$env:RELEASE_VERSION"
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Increase the version before publishing." }
-          gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" "ControlConsole-update-$env:RELEASE_VERSION.zip.sha256" --title $tag --notes 'Code update only. Install the local full package once before using automatic updates.' --target $env:GITHUB_SHA
+          gh release create $tag "ControlConsole-update-$env:RELEASE_VERSION.zip" "ControlConsole-update-$env:RELEASE_VERSION.zip.sha256" --title $tag --notes 'Application update. The secondary PC securely syncs missing local game assets from its connected host over LAN; native game assets are not published to GitHub.' --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
