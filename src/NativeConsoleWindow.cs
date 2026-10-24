@@ -78,6 +78,10 @@ namespace NixLanConsole
         private DateTime TransformationStarted;
         private bool Transforming;
         private bool PreviousGameRunning;
+        private DateTime GameStartedAtUtc = DateTime.MinValue;
+        private int HighLoadSeconds;
+        private int LowLoadSeconds;
+        private bool HighLoadScene;
         private bool PreviousFoliaPlaying;
         private DateTime FoliaExitedAtUtc = DateTime.MinValue;
         private string LiveGameName = "";
@@ -97,11 +101,11 @@ namespace NixLanConsole
         private Image StartBackground;
         private Image StartPressedBackground;
         private RoleClip CurrentClip;
+        private RoleClip PreviousClip;
         private RoleScene CurrentScene;
         private Image DisplayedFrame;
         private DateTime ClipStarted;
         private bool IsKangel;
-        private bool IsGameRunning;
         private string RoleAssetError;
         private bool Dragging;
         private Point DragOrigin;
@@ -613,7 +617,6 @@ namespace NixLanConsole
         {
             DashboardState state = DisplayServer.Snapshot();
             HostState.Text = state.online ? "主机在线  /  " + state.host : "主机离线";
-            TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (state.role == "kangel" ? "超天酱" : "糖糖");
             MetricValues[0].Text = state.online && state.cpu >= 0 ? Math.Round(state.cpu) + "%" : "—";
             MetricValues[1].Text = state.online && state.memoryTotal > 0 ? Math.Round(state.memoryUsed / state.memoryTotal * 100) + "%" : "—";
             MetricValues[2].Text = state.online && state.gpu >= 0 ? Math.Round(state.gpu) + "%" : "—";
@@ -622,11 +625,22 @@ namespace NixLanConsole
             for (int i = 0; i < 3; i++) MetricFills[i].Width = (int)(MetricFills[i].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, values[i])) / 100.0);
             MetricFills[3].Width = (int)(MetricFills[3].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, Math.Max(state.cpuTemp, state.gpuTemp))) / 100.0);
             Samples.Add(new[] { values[0], values[1], values[2] }); if (Samples.Count > 60) Samples.RemoveAt(0); Chart.Invalidate();
-            CharacterState.Text = state.role == "kangel" || state.role == "transform" ? "超天酱 · " + (state.games != null && state.games.Length > 0 ? "游戏运行中 ♡" : "待机 ♡") : "糖糖 · 日常待机 ♡";
             bool kangel = state.role == "kangel" || state.role == "transform";
             bool playing = state.games != null && state.games.Length > 0;
             bool wasKangel = IsKangel;
-            RoleScene nextScene = playing && kangel ? RoleScene.LiveGaming : kangel ? RoleScene.AfterGame : state.online ? RoleScene.Daily : RoleScene.HostOffline;
+            if (playing && !PreviousGameRunning) GameStartedAtUtc = DateTime.UtcNow;
+            if (playing && state.online)
+            {
+                bool loadIsHigh = state.gpu >= 82 || state.cpu >= 88;
+                if (loadIsHigh) { HighLoadSeconds++; LowLoadSeconds = 0; if (HighLoadSeconds >= 5) HighLoadScene = true; }
+                else { LowLoadSeconds++; HighLoadSeconds = 0; if (LowLoadSeconds >= 15) HighLoadScene = false; }
+            }
+            else { HighLoadSeconds = 0; LowLoadSeconds = 0; HighLoadScene = false; }
+            bool gameOpening = playing && GameStartedAtUtc != DateTime.MinValue && (DateTime.UtcNow - GameStartedAtUtc).TotalSeconds < 15;
+            RoleScene nextScene = RoleAnimationCatalog.Resolve(state.online, kangel, playing,
+                state.foliaPlaying, gameOpening, HighLoadScene, DateTime.Now.Hour);
+            CharacterState.Text = RoleAnimationCatalog.Caption(nextScene);
+            TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (RoleAnimationCatalog.IsKangel(nextScene) ? "超天酱" : "糖糖");
             if (nextScene != CurrentScene || CurrentClip == null) SelectRoleClip(nextScene);
             LiveGameName = playing ? state.games[0] : "";
             if (playing && !PreviousGameRunning)
@@ -640,6 +654,7 @@ namespace NixLanConsole
             }
             if (!playing && !kangel) { Transforming = false; TransitionOverlay.Visible = false; LiveCard.Visible = false; LiveTab.Visible = false; }
             PreviousGameRunning = playing;
+            if (!playing) GameStartedAtUtc = DateTime.MinValue;
             bool foliaPlaying = state.online && state.foliaPlaying && !String.IsNullOrWhiteSpace(state.foliaKey);
             RefreshFoliaMedia(state);
             if (foliaPlaying && !PreviousFoliaPlaying) OpenFolia(false);
@@ -837,7 +852,9 @@ namespace NixLanConsole
                     var clipData = entry.Value as Dictionary<string, object>; if (clipData == null) continue;
                     double duration = Convert.ToDouble(clipData["duration"]);
                     var frameList = clipData["frames"] as IEnumerable; if (frameList == null) continue;
-                    var clip = new RoleClip { Name = entry.Key, Duration = duration };
+                    RoleAnimationCategory category = RoleAnimationCatalog.Classify(entry.Key);
+                    if (category == RoleAnimationCategory.Unknown) { StartupDiagnostics.Write("uncategorized role clip skipped: " + entry.Key); continue; }
+                    var clip = new RoleClip { Name = entry.Key, Category = category, Duration = duration };
                     foreach (object value in frameList)
                     {
                         var frameData = value as Dictionary<string, object>; if (frameData == null) continue;
@@ -850,10 +867,9 @@ namespace NixLanConsole
                     }
                     if (clip.Frames.Count > 0) (kangel ? KangelClips : AmeClips).Add(clip);
                 }
-                SceneClips[RoleScene.Daily] = AmeClips.Where(x => x.Name.Contains("_idle_normal_") || x.Name.Contains("_idle_happy_")).ToList();
-                SceneClips[RoleScene.HostOffline] = AmeClips.Where(x => x.Name.Contains("_idle_anxiety_") || x.Name.Contains("_idle_iraira_")).ToList();
-                SceneClips[RoleScene.AfterGame] = KangelClips.Where(x => x.Name == "stream_cho_akaruku" || x.Name == "stream_cho_kawaiku" || x.Name == "stream_cho_gaoo").ToList();
-                SceneClips[RoleScene.LiveGaming] = KangelClips.Where(x => x.Name == "stream_cho_game" || x.Name == "stream_cho_game_fever" || x.Name == "stream_cho_akaruku").ToList();
+                foreach (RoleScene scene in Enum.GetValues(typeof(RoleScene)))
+                    SceneClips[scene] = (RoleAnimationCatalog.IsKangel(scene) ? KangelClips : AmeClips)
+                        .Where(x => RoleAnimationCatalog.Weight(scene, x.Category) > 0).ToList();
             }
             catch (Exception ex) { RoleAssetError = ex.ToString(); }
             CharacterCanvas.Invalidate();
@@ -955,17 +971,27 @@ namespace NixLanConsole
         private void SelectRoleClip(RoleScene scene)
         {
             CurrentScene = scene;
-            IsKangel = scene == RoleScene.AfterGame || scene == RoleScene.LiveGaming;
-            IsGameRunning = scene == RoleScene.LiveGaming;
+            IsKangel = RoleAnimationCatalog.IsKangel(scene);
             List<RoleClip> list;
             if (!SceneClips.TryGetValue(scene, out list) || list.Count == 0) list = IsKangel ? KangelClips : AmeClips;
-            if (list.Count == 0) CurrentClip = null;
-            else if (list.Count == 1) CurrentClip = list[0];
+            RoleClip next;
+            if (list.Count == 0) next = null;
+            else if (list.Count == 1) next = list[0];
             else
             {
                 var candidates = list.Where(x => x != CurrentClip).ToList();
-                CurrentClip = candidates[Randomizer.Next(candidates.Count)];
+                if (candidates.Count > 3 && PreviousClip != null) candidates.Remove(PreviousClip);
+                int totalWeight = candidates.Sum(x => Math.Max(1, RoleAnimationCatalog.Weight(scene, x.Category)));
+                int roll = Randomizer.Next(totalWeight);
+                next = candidates[candidates.Count - 1];
+                foreach (RoleClip candidate in candidates)
+                {
+                    roll -= Math.Max(1, RoleAnimationCatalog.Weight(scene, candidate.Category));
+                    if (roll < 0) { next = candidate; break; }
+                }
             }
+            PreviousClip = CurrentClip;
+            CurrentClip = next;
             ClipStarted = DateTime.UtcNow;
             DisplayedFrame = CurrentFrame();
             CharacterCanvas.Invalidate();
@@ -994,8 +1020,7 @@ namespace NixLanConsole
             return FrameAt(CurrentClip, (DateTime.UtcNow - ClipStarted).TotalSeconds);
         }
 
-        private sealed class RoleClip { public string Name; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
-        private enum RoleScene { Daily, HostOffline, AfterGame, LiveGaming }
+        private sealed class RoleClip { public string Name; public RoleAnimationCategory Category; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
         private sealed class RoleFrame { public double Time; public Image Image; }
 
         private sealed class BufferedPanel : Panel

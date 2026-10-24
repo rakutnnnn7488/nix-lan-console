@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.0.2**，修复 Folia 播放事件和更新后启动器误判旧进程仍在运行的问题；源码版本不代表远端已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.1.0**，按日常、音乐、游戏开场、激烈游戏、游戏后及主机离线等场景编排原生角色动画；源码版本不代表远端已发布该版本。
 
 ## 安装布局
 
