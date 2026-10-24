@@ -6,6 +6,8 @@ on:
       - 'src/**'
       - 'build.ps1'
       - 'version.txt'
+      - 'asset-tree.sha256'
+      - 'role-manifest.sha256'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 permissions:
@@ -27,6 +29,7 @@ jobs:
           Copy-Item "build\versions\$version\ControlConsole.exe" (Join-Path $stage "versions\$version\ControlConsole.exe") -Force
           Copy-Item "build\versions\$version\Launcher.exe" (Join-Path $stage "versions\$version\Launcher.exe") -Force
           Copy-Item "build\version.txt" (Join-Path $stage "version.txt") -Force
+          Copy-Item "asset-tree.sha256","role-manifest.sha256" -Destination $stage -Force
           $archive = "ControlConsole-update-$version.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
           $check = Join-Path $env:RUNNER_TEMP "check-$version"
@@ -34,6 +37,9 @@ jobs:
           if (!(Test-Path (Join-Path $check "versions\$version\ControlConsole.exe"))) { throw 'Update package is missing the versioned application' }
           if (!(Test-Path (Join-Path $check "versions\$version\Launcher.exe"))) { throw 'Update package is missing the launcher repair binary' }
           if (((Get-Content (Join-Path $check 'version.txt') -Raw).Trim()) -ne $version) { throw 'Update package version.txt mismatch' }
+          foreach ($name in @('asset-tree.sha256','role-manifest.sha256')) {
+            if ((Get-Content (Join-Path $check $name) -Raw).Trim() -notmatch '^[0-9A-Fa-f]{64}$') { throw "Update package $name is missing or invalid" }
+          }
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $archive" -Encoding ascii
           "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
@@ -48,7 +54,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             git fetch origin $publishedTarget --depth=1
             if ($LASTEXITCODE -ne 0) { throw "Could not compare existing release $tag." }
-            git diff --quiet $publishedTarget $env:GITHUB_SHA -- src build.ps1 version.txt
+            git diff --quiet $publishedTarget $env:GITHUB_SHA -- src build.ps1 version.txt asset-tree.sha256 role-manifest.sha256
             if ($LASTEXITCODE -ne 0) { throw "Release $tag already exists for different application code. Increase the version." }
             gh release edit $tag --notes $notes
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

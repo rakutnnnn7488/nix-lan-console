@@ -17,10 +17,10 @@ namespace NixLanConsole
         private static readonly object BundleGate = new object();
         internal static string CacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
 
-        internal static bool HasCurrentAssets(string installRoot)
+        internal static bool HasCurrentAssets(string installRoot, string expectedTree = null)
         {
             string assets = Path.Combine(installRoot, "game-assets");
-            return Directory.Exists(assets) && String.Equals(HashTree(assets), AssetTreeSha256, StringComparison.OrdinalIgnoreCase);
+            return Directory.Exists(assets) && String.Equals(HashTree(assets), expectedTree ?? AssetTreeSha256, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string HashTree(string root)
@@ -188,7 +188,7 @@ namespace NixLanConsole
             finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
         }
 
-        internal static string StageInstall(string archivePath, string installRoot)
+        internal static string StageInstall(string archivePath, string installRoot, string expectedTree = null, string expectedManifest = null)
         {
             string stage = Path.Combine(installRoot, "game-assets-stage-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stage);
@@ -218,8 +218,8 @@ namespace NixLanConsole
                     }
                 }
                 string manifest = Path.Combine(stage, "native-role", "角色动画.json");
-                if (!File.Exists(manifest) || !String.Equals(HashFile(manifest), ManifestSha256, StringComparison.OrdinalIgnoreCase) ||
-                    !String.Equals(HashTree(stage), AssetTreeSha256, StringComparison.OrdinalIgnoreCase))
+                if (!File.Exists(manifest) || !String.Equals(HashFile(manifest), expectedManifest ?? ManifestSha256, StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(HashTree(stage), expectedTree ?? AssetTreeSha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("主机角色素材版本与程序不匹配。");
                 return stage;
             }

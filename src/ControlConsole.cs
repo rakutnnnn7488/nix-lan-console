@@ -788,7 +788,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.8.3.0";
+        public const string Version = "1.8.3.1";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -869,7 +869,7 @@ namespace NixLanConsole
         public static void Run()
         {
             Directory.CreateDirectory(DataDir); LoadSettings(); LoadReviewItems(); LoadSessions();
-            UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(30));
+            UpdateTimer = new System.Threading.Timer(CheckForUpdate, null, TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(5));
             Tray = new TrayContext();
             var tcpThread = new Thread(ReadTcp) { IsBackground = true }; tcpThread.Start();
             StartupDiagnostics.Ready("--display");
@@ -906,7 +906,18 @@ namespace NixLanConsole
                     if (ReadPackageVersion(githubZip, out githubVersion) && (available == null || githubVersion > available))
                     { available = githubVersion; sourceZip = githubZip; }
                 }
-                if (sourceZip == null) { SetUpdateProgress("latest", 100, current.ToString(), "当前版本已是最新版本 " + current + "。"); return; }
+                if (sourceZip == null)
+                {
+                    if (!hostMode && !AssetBundleSync.HasCurrentAssets(BuildInfo.InstallDir))
+                    {
+                        RepairCurrentAssets(current.ToString());
+                        return;
+                    }
+                    SetUpdateProgress("latest", 100, current.ToString(), "当前版本已是最新版本 " + current + "。");
+                    return;
+                }
+                string expectedTree, expectedManifest;
+                ReadAssetHashes(sourceZip, available, out expectedTree, out expectedManifest);
                 string failedUpdate = Path.Combine(DataDir, "failed-update.txt");
                 if (!force && File.Exists(failedUpdate) && String.Equals(File.ReadAllText(failedUpdate, Encoding.UTF8).Trim(), available.ToString(), StringComparison.OrdinalIgnoreCase) && DateTime.UtcNow - File.GetLastWriteTimeUtc(failedUpdate) < TimeSpan.FromHours(24))
                 {
@@ -922,27 +933,8 @@ namespace NixLanConsole
                 string assetPending = Path.Combine(BuildInfo.InstallDir, "asset-pending.txt");
                 try
                 {
-                    if (!hostMode && !AssetBundleSync.HasCurrentAssets(BuildInfo.InstallDir))
-                    {
-                        string address, key, hostVersion;
-                        lock (Gate)
-                        {
-                            address = Settings.hostAddress;
-                            key = Last == null ? null : Last.foliaKey;
-                            hostVersion = Last == null ? null : Last.version;
-                        }
-                        if (!String.Equals(hostVersion, available.ToString(), StringComparison.Ordinal))
-                            throw new IOException("主机尚未更新到 " + available + "，等待主机更新后再同步素材。");
-                        SetUpdateProgress("downloading", 0, available.ToString(), "正在从主机同步角色素材…");
-                        string assetZip = AssetBundleSync.Download(address, key, available.ToString(), delegate(int percent, string message)
-                        { SetUpdateProgress("downloading", percent, available.ToString(), message); });
-                        try
-                        {
-                            SetUpdateProgress("installing", 96, available.ToString(), "正在校验并安装角色素材…");
-                            assetStage = AssetBundleSync.StageInstall(assetZip, BuildInfo.InstallDir);
-                        }
-                        finally { try { File.Delete(assetZip); } catch { } }
-                    }
+                    if (!hostMode && !AssetBundleSync.HasCurrentAssets(BuildInfo.InstallDir, expectedTree))
+                        assetStage = StageMissingAssets(available.ToString(), expectedTree, expectedManifest);
                     attempted = available;
                     previousVersion = InstallVersionPackage(localZip, available.ToString());
                     if (assetStage != null)
@@ -971,6 +963,66 @@ namespace NixLanConsole
                 try { File.AppendAllText(Path.Combine(DataDir, "update.log"), DateTime.Now.ToString("s") + " update check: " + ex.Message + Environment.NewLine, Encoding.UTF8); } catch { }
             }
             finally { Interlocked.Exchange(ref UpdateStarted, 0); }
+        }
+        private static void ReadAssetHashes(string archivePath, Version version, out string tree, out string manifest)
+        {
+            tree = AssetBundleSync.AssetTreeSha256;
+            manifest = AssetBundleSync.ManifestSha256;
+            using (var archive = ZipFile.OpenRead(archivePath))
+            {
+                var treeEntry = archive.GetEntry("asset-tree.sha256");
+                var manifestEntry = archive.GetEntry("role-manifest.sha256");
+                if (treeEntry == null || manifestEntry == null)
+                {
+                    if (version == new Version(1, 8, 3, 0)) return;
+                    throw new InvalidDataException("GitHub 更新包缺少素材版本校验信息。");
+                }
+                using (var reader = new StreamReader(treeEntry.Open(), Encoding.UTF8)) tree = reader.ReadToEnd().Trim().TrimStart('\uFEFF');
+                using (var reader = new StreamReader(manifestEntry.Open(), Encoding.UTF8)) manifest = reader.ReadToEnd().Trim().TrimStart('\uFEFF');
+                if (!Regex.IsMatch(tree, @"\A[0-9a-fA-F]{64}\z") || !Regex.IsMatch(manifest, @"\A[0-9a-fA-F]{64}\z"))
+                    throw new InvalidDataException("GitHub 更新包的素材哈希无效。");
+            }
+        }
+
+        private static string StageMissingAssets(string version, string expectedTree, string expectedManifest)
+        {
+            string address, key, hostVersion;
+            lock (Gate)
+            {
+                address = Settings.hostAddress;
+                key = Last == null ? null : Last.foliaKey;
+                hostVersion = Last == null ? null : Last.version;
+            }
+            if (!String.Equals(hostVersion, version, StringComparison.Ordinal))
+                throw new IOException("主机尚未更新到 " + version + "，等待主机更新后再同步素材。");
+            SetUpdateProgress("downloading", 0, version, "正在从主机同步角色素材…");
+            string zip = AssetBundleSync.Download(address, key, version, delegate(int percent, string message)
+            { SetUpdateProgress("downloading", percent, version, message); });
+            try
+            {
+                SetUpdateProgress("installing", 96, version, "正在校验并安装角色素材…");
+                return AssetBundleSync.StageInstall(zip, BuildInfo.InstallDir, expectedTree, expectedManifest);
+            }
+            finally { try { File.Delete(zip); } catch { } }
+        }
+
+        private static void RepairCurrentAssets(string version)
+        {
+            string stage = StageMissingAssets(version, AssetBundleSync.AssetTreeSha256, AssetBundleSync.ManifestSha256);
+            string marker = Path.Combine(BuildInfo.InstallDir, "asset-pending.txt");
+            try
+            {
+                File.WriteAllText(marker, version + "|" + Path.GetFileName(stage), Encoding.UTF8);
+                SetUpdateProgress("installing", 99, version, "角色素材已就绪，正在重新打开控制台…");
+                RestartThroughLauncher("--display");
+                Environment.Exit(0);
+            }
+            catch
+            {
+                try { if (File.Exists(marker)) File.Delete(marker); } catch { }
+                try { if (Directory.Exists(stage)) Directory.Delete(stage, true); } catch { }
+                throw;
+            }
         }
         private static string FindGitHubUpdate(Version current, Version localAvailable)
         {
