@@ -258,10 +258,19 @@ namespace NixLanConsole
                 string setCookie = keyInUrl ? "Set-Cookie: foliaLan=" + AccessKey + "; HttpOnly; SameSite=Lax; Path=/\r\n" : null;
                 if (uri.AbsolutePath == "/display" || uri.AbsolutePath == "/")
                 {
-                    WriteAscii(stream, "HTTP/1.1 302 Found\r\nLocation: /obs?obs=1&key=" + AccessKey + "\r\n" + setCookie + "Content-Length: 0\r\nConnection: close\r\n\r\n");
+                    WriteAscii(stream, "HTTP/1.1 302 Found\r\nLocation: /neon?key=" + AccessKey + "\r\n" + setCookie + "Content-Length: 0\r\nConnection: close\r\n\r\n");
                     return;
                 }
-                if (uri.AbsolutePath == "/playback")
+                if (uri.AbsolutePath == "/neon")
+                {
+                    SendText(stream, 200, "OK", ReadEmbedded("NeonPage"), setCookie, "text/html; charset=utf-8");
+                    return;
+                }
+                if (uri.AbsolutePath == "/neon/client.mjs")
+                {
+                    SendText(stream, 200, "OK", ReadEmbedded("NeonClient"), setCookie, "text/javascript; charset=utf-8");
+                    return;
+                }                if (uri.AbsolutePath == "/playback")
                 {
                     SendText(stream, 200, "OK", Json.Serialize(new { connected = Connected, playing = Playing, sourceRunning = SourceRunning, song = Song, artist = Artist, cover = HasCover }), setCookie, "application/json; charset=utf-8");
                     return;
@@ -327,6 +336,14 @@ namespace NixLanConsole
             return null;
         }
 
+        private static string ReadEmbedded(string name)
+        {
+            using (var body = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+            {
+                if (body == null) throw new FileNotFoundException("Missing embedded Folia visualizer resource: " + name);
+                using (var reader = new StreamReader(body, Encoding.UTF8)) return reader.ReadToEnd();
+            }
+        }
         private static void WriteAscii(Stream stream, string text)
         {
             byte[] bytes = Encoding.ASCII.GetBytes(text);
@@ -341,3 +358,5 @@ namespace NixLanConsole
         }
     }
 }
+
+

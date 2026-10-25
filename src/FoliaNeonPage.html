@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>霓虹像素日记</title><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#17152d}#stage{position:relative;width:100%;height:100%}#status{position:absolute;left:3%;bottom:3%;color:#fbeafa;background:#45318a;padding:5px 8px;font:12px monospace;pointer-events:none}</style></head><body><div id="stage"></div><div id="status">正在连接 Folia…</div><script type="module">
+import activate from '/neon/client.mjs';
+let visualizer=null;activate({registries:{visualizers:{register:def=>{visualizer=def}}}});
+const stage=document.getElementById('stage'),status=document.getElementById('status');
+let config=null,clock=null,audio=0,dispose=null,connected=false;
+const lyricTime=()=>{if(!clock)return 0;const offset=(clock.lyricOffsetMs||0)/1000;const playing=String(clock.playerState).toUpperCase()==='PLAYING';const elapsed=playing?Math.max(0,(Date.now()-clock.sentAtMs)/1000)*(clock.playbackRate||1):0;const t=clock.currentTime+elapsed;return (clock.duration>0?Math.min(clock.duration,t):t)-offset};
+const lineIndex=()=>{const lines=config?.lyrics?.lines||[],t=lyricTime();for(let i=lines.length-1;i>=0;i--){const line=lines[i];if(t>=line.startTime&&t<(line.renderHints?.renderEndTime??(lines[i+1]?.startTime??line.endTime+1)))return i}return -1};
+function mount(){if(dispose){dispose();dispose=null}if(!config||!visualizer)return;const song={name:config.song?.name||'NOW PLAYING',artist:config.songArtist||'PIXEL RADIO'};dispose=visualizer.mount(stage,{song,lines:config.lyrics?.lines||[],lyricTime:{get:lyricTime},getLineIndex:lineIndex,audio:{getPower:()=>audio}});status.style.display='none'}
+const events=new EventSource('/obs/events');
+events.onopen=()=>{connected=true;status.style.display='none'};
+events.onerror=()=>{connected=false;status.textContent='Folia 连接中…';status.style.display='block'};
+events.addEventListener('config',event=>{try{const value=JSON.parse(event.data);if(value.updatedAt===config?.updatedAt)return;config=value;mount()}catch(error){status.textContent='歌词数据读取失败';status.style.display='block'}});
+events.addEventListener('clock',event=>{try{clock=JSON.parse(event.data)}catch{}});
+events.addEventListener('audio',event=>{try{audio=Number(JSON.parse(event.data).audioPower)||0}catch{}});
+</script></body></html>
+

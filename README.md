@@ -4,7 +4,7 @@
 
 ## 当前源码
 
-源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.3.1**，包含 63 段原生角色动画（糖糖 28、超天酱 35），按日常、音乐、游戏开场、激烈游戏、游戏后及主机离线等场景编排。GitHub 更新程序；副机缺少的原生素材通过已连接的主机自动同步。源码版本不代表远端已发布该版本。
+源码版本见 `version.txt` 和 `src/ControlConsole.cs` 的 `BuildInfo.Version`，两处必须一致。当前源码为 **1.8.3.2**，包含 63 段原生角色动画（糖糖 28、超天酱 35），按日常、音乐、游戏开场、激烈游戏、游戏后及主机离线等场景编排。GitHub 更新程序；副机缺少的原生素材通过已连接的主机自动同步。源码版本不代表远端已发布该版本。
 
 ## 安装布局
 
@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 两台电脑运行同一程序，分别选择“主机”和“副机”；主、副机均有托盘图标。
 - 主机监听 **TCP 46702**。首次配置可在主机管理员 PowerShell 运行 `OpenHostTcpPort.ps1`。副机从“开始 → 设置 → 软件版本”填写主机当前 IPv4 地址。
 - 副机显示主机 CPU、内存、GPU、可读取的温度、最近一分钟曲线，以及按游戏进程记录的时长。主机地址变化后应更新副机设置。
-- Folia 安装在**主机**。主机程序读取 Folia 自带的 OBS 浏览器源，并通过现有 TCP 46702 端口转发歌词动效；副机程序在可拖动的游戏风格窗口中显示原版动效。主机开始播放时自动打开，暂停时保留画面，完全退出 Folia 后约 10 秒关闭。副机无需安装 Folia、运行旧局域网脚本或填写播放器路径。
+- Folia 安装在**主机**。主机程序读取 Folia 自带的 OBS 浏览器源事件，并通过现有 TCP 46702 端口转发歌词与音频数据；副机程序在可拖动的游戏风格窗口中用 Folia 的歌词、时钟与音频事件绘制原创霓虹像素动效。主机开始播放时自动打开，暂停时保留画面，完全退出 Folia 后约 10 秒关闭。副机无需安装 Folia、运行旧局域网脚本或填写播放器路径。
 - 主机 Folia 的设置中需启用“OBS 浏览器源”；当前版本不会改动 Folia 的配置。副机显示使用系统 Microsoft Edge 的渲染进程，但没有单独的浏览器窗口。
 - Folia 卡片仅显示控制台的游戏风格标题栏；Edge 应用模式自绘的“Folia OBS”标题条会从卡片可见区域裁掉。
 - 控制台桌面提供紫粉色像素音符 Folia 图标；图标由程序绘制，代码更新包即可带来。Folia 专用 Edge 配置禁用浏览器扩展。
@@ -60,3 +60,5 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 发布前应同步 `version.txt` 与 `BuildInfo.Version`，运行 `Updater` 时代的隔离测试已由新流程取代：构建、`build-installer.ps1 --verify`、`--test-install`/`--test-rollback`、以及本机启动器/更新模拟。
 
 历史设计过程见 `NATIVE-UI-MIGRATION.md`；本地项目的当前任务和验收标准见工作区根目录的 `工作日志.md`（最新事实来源）。
+
+
