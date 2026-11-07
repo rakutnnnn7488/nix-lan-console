@@ -350,6 +350,8 @@ namespace NixLanConsole
         private readonly CheckedListBox Games;
         private readonly CheckBox AutoUpdate;
         private readonly CheckBox HostAutoUpdate;
+        private readonly RadioButton IdleAme;
+        private readonly RadioButton IdleKangel;
         private readonly TextBox HostAddress;
         private readonly Label UpdateMessage;
         private readonly ProgressBar UpdateProgress;
@@ -374,6 +376,17 @@ namespace NixLanConsole
             var review = MakeButton("识别纠错箱"); review.Click += delegate { using (var dialog = new NativeGameReviewDialog()) dialog.ShowDialog(this); };
             gameActions.Controls.Add(save); gameActions.Controls.Add(purge); gameActions.Controls.Add(review);
             gamesTab.Controls.Add(Games); gamesTab.Controls.Add(gameTop); gamesTab.Controls.Add(gameActions);
+
+            var characterTab = new TabPage("角色");
+            var characterLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20) };
+            characterLayout.Controls.Add(new Label { Text = "待机时显示的角色", Width = 650, Height = 45, Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold) });
+            IdleAme = new RadioButton { Text = "糖糖（默认）", Checked = !State.idleKangel, Width = 650, Height = 42 };
+            IdleKangel = new RadioButton { Text = "超天酱", Checked = State.idleKangel, Width = 650, Height = 42 };
+            characterLayout.Controls.Add(IdleAme); characterLayout.Controls.Add(IdleKangel);
+            characterLayout.Controls.Add(new Label { Text = "启动已追踪游戏时始终显示超天酱；从糖糖切换时播放游戏原生变身动画。游戏结束后保留超天酱 10 分钟，再恢复所选待机角色。", Width = 680, Height = 72 });
+            var saveCharacter = MakeButton("保存角色设置"); saveCharacter.Click += delegate { SaveGames(); };
+            characterLayout.Controls.Add(saveCharacter);
+            characterTab.Controls.Add(characterLayout);
 
             var versionTab = new TabPage("软件版本");
             var versionLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(18) };
@@ -421,7 +434,7 @@ namespace NixLanConsole
             copyDiagnosis.Click += delegate { try { Clipboard.SetText(DiagnosisText.Text); MessageBox.Show(this, "诊断信息已复制，可直接发给我排查。", "连接诊断"); } catch (Exception ex) { MessageBox.Show(this, ex.Message, "复制失败"); } };
             diagnosisLayout.Controls.Add(copyDiagnosis); diagnosisTab.Controls.Add(diagnosisLayout);
 
-            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); tabs.TabPages.Add(diagnosisTab); Controls.Add(tabs);
+            tabs.TabPages.Add(gamesTab); tabs.TabPages.Add(characterTab); tabs.TabPages.Add(versionTab); tabs.TabPages.Add(foliaTab); tabs.TabPages.Add(diagnosisTab); Controls.Add(tabs);
             RefreshTimer = new System.Windows.Forms.Timer { Interval = 500 }; RefreshTimer.Tick += delegate { RefreshProgress(); if (tabs.SelectedTab == diagnosisTab) RefreshDiagnostics(); }; RefreshTimer.Start();
             FormClosed += delegate { RefreshTimer.Stop(); RefreshTimer.Dispose(); };
             RefreshProgress();
@@ -450,7 +463,7 @@ namespace NixLanConsole
         {
             var excluded = new List<string>();
             foreach (object item in Games.Items) if (!Games.GetItemChecked(Games.Items.IndexOf(item))) excluded.Add(Convert.ToString(item));
-            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
+            try { DisplayServer.SaveNativeSettings(AutoUpdate.Checked, HostAutoUpdate.Checked, excluded, HostAddress.Text, IdleKangel.Checked); State = DisplayServer.Snapshot(); MessageBox.Show(this, "设置已保存。", "控制台设置"); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
         private void PurgeSelected()
@@ -640,4 +653,5 @@ namespace NixLanConsole
         }
     }
 }
+
 

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Drawing.Text;
+using System.Drawing.Imaging;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -75,6 +76,10 @@ namespace NixLanConsole
         private Image CardCloseImage;
         private Image JineBackground;
         private Image LiveTemplate;
+        private Image TransformationGif;
+        private MemoryStream TransformationGifStream;
+        private double[] TransformationFrameEnds;
+        private double TransformationDuration;
         private DateTime TransformationStarted;
         private bool Transforming;
         private bool PreviousGameRunning;
@@ -305,7 +310,7 @@ namespace NixLanConsole
                 if (!Object.ReferenceEquals(frame, DisplayedFrame)) { DisplayedFrame = frame; CharacterCanvas.Invalidate(); }
                 if (Transforming)
                 {
-                    if ((DateTime.UtcNow - TransformationStarted).TotalSeconds >= 3.8) FinishTransformation();
+                    if ((DateTime.UtcNow - TransformationStarted).TotalSeconds >= TransformationDuration) FinishTransformation();
                     else TransitionOverlay.Invalidate();
                 }
                 else if (LiveCard.Visible) LiveCanvas.Invalidate();
@@ -342,6 +347,8 @@ namespace NixLanConsole
                 if (MetricCompactText != null) MetricCompactText.Dispose();
                 if (MetricTemperatureText != null) MetricTemperatureText.Dispose();
                 if (LiveText != null) LiveText.Dispose();
+                if (TransformationGif != null) TransformationGif.Dispose();
+                if (TransformationGifStream != null) TransformationGifStream.Dispose();
                 if (InterfaceFonts != null) InterfaceFonts.Dispose();
                 if (PixelText != null) PixelText.Dispose();
                 if (PixelSmallText != null) PixelSmallText.Dispose();
@@ -639,14 +646,14 @@ namespace NixLanConsole
             else { HighLoadSeconds = 0; LowLoadSeconds = 0; HighLoadScene = false; }
             bool gameOpening = playing && GameStartedAtUtc != DateTime.MinValue && (DateTime.UtcNow - GameStartedAtUtc).TotalSeconds < 15;
             RoleScene nextScene = RoleAnimationCatalog.Resolve(state.online, kangel, playing,
-                state.foliaPlaying, gameOpening, HighLoadScene, DateTime.Now.Hour);
+                state.foliaPlaying, gameOpening, HighLoadScene, DateTime.Now.Hour, state.idleKangel);
             CharacterState.Text = RoleAnimationCatalog.Caption(nextScene);
             TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (RoleAnimationCatalog.IsKangel(nextScene) ? "超天酱" : "糖糖");
             if (nextScene != CurrentScene || CurrentClip == null) SelectRoleClip(nextScene);
             LiveGameName = playing ? state.games[0] : "";
             if (playing && !PreviousGameRunning)
             {
-                if (!wasKangel && kangel) StartTransformation();
+                if (!wasKangel) StartTransformation();
                 else { LiveCard.Visible = true; LiveTab.Visible = true; FocusCard(LiveCard); }
             }
             else if (!playing && PreviousGameRunning)
@@ -839,6 +846,7 @@ namespace NixLanConsole
                 CharacterCard.Invalidate(); StatsCard.Invalidate(); RecordsCard.Invalidate();
                 if (File.Exists(Path.Combine(assets, "jine_bg.png"))) { JineBackground = LoadDetachedImage(Path.Combine(assets, "jine_bg.png")); RecordsCard.Controls[0].BackgroundImage = JineBackground; }
                 if (File.Exists(Path.Combine(assets, "haisin.png"))) LiveTemplate = LoadDetachedImage(Path.Combine(assets, "haisin.png"));
+                LoadTransformationAsset(Path.Combine(assets, "henshin.gif"));
                 if (File.Exists(Path.Combine(assets, "icon_jine_ame.png"))) RecordAvatar.Image = LoadDetachedImage(Path.Combine(assets, "icon_jine_ame.png"));
                 if (File.Exists(Path.Combine(assets, "tail.png"))) RecordTail.Image = LoadDetachedImage(Path.Combine(assets, "tail.png"));
                 if (File.Exists(Path.Combine(assets, "button_start.png"))) { StartBackground = LoadDetachedImage(Path.Combine(assets, "button_start.png")); StartButton.BackgroundImage = StartBackground; }
@@ -881,8 +889,38 @@ namespace NixLanConsole
             using (var stream = new MemoryStream(File.ReadAllBytes(path))) using (var source = Image.FromStream(stream)) return new Bitmap(source);
         }
 
+        private void LoadTransformationAsset(string path)
+        {
+            if (!File.Exists(path)) return;
+            try
+            {
+                TransformationGifStream = new MemoryStream(File.ReadAllBytes(path));
+                TransformationGif = Image.FromStream(TransformationGifStream);
+                int count = TransformationGif.GetFrameCount(FrameDimension.Time);
+                byte[] delays = TransformationGif.GetPropertyItem(0x5100).Value;
+                if (count < 2 || delays.Length < count * 4) throw new InvalidDataException("变身动画帧时序不完整");
+                TransformationFrameEnds = new double[count];
+                for (int i = 0; i < count; i++)
+                    TransformationFrameEnds[i] = (i == 0 ? 0 : TransformationFrameEnds[i - 1]) + Math.Max(0.02, BitConverter.ToInt32(delays, i * 4) / 100.0);
+                TransformationDuration = TransformationFrameEnds[count - 1];
+            }
+            catch (Exception ex)
+            {
+                StartupDiagnostics.Write("transformation asset: " + ex.Message);
+                if (TransformationGif != null) TransformationGif.Dispose();
+                if (TransformationGifStream != null) TransformationGifStream.Dispose();
+                TransformationGif = null; TransformationGifStream = null; TransformationFrameEnds = null;
+            }
+        }
+
         private void StartTransformation()
         {
+            if (TransformationGif == null || TransformationFrameEnds == null)
+            {
+                StartupDiagnostics.Write("transformation GIF unavailable; opening live card directly");
+                LiveCard.Visible = true; LiveTab.Visible = true; FocusCard(LiveCard);
+                return;
+            }
             Transforming = true;
             TransformationStarted = DateTime.UtcNow;
             LiveCard.Visible = false;
@@ -905,22 +943,19 @@ namespace NixLanConsole
         private void PaintTransformation(object sender, PaintEventArgs e)
         {
             var g = e.Graphics;
-            g.Clear(Color.FromArgb(245, 223, 247));
+            g.Clear(Color.Black);
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
             double elapsed = Math.Max(0, (DateTime.UtcNow - TransformationStarted).TotalSeconds);
-            int width = Math.Min(Desktop.Width - 40, (int)(696 * Math.Min(2.0, Desktop.Width / 760.0)));
-            int height = (int)(width * 454.0 / 696.0);
-            var viewport = new Rectangle((Desktop.Width - width) / 2, Math.Max(20, (Desktop.Height - height) / 2 - 25), width, height);
-            if (CharacterBackground != null) g.DrawImage(CharacterBackground, viewport);
-            RoleClip clip = elapsed < 1.25
-                ? AmeClips.FirstOrDefault(x => x.Name == "stream_ame_idle_normal_a")
-                : KangelClips.FirstOrDefault(x => x.Name == "stream_cho_kawaiku");
-            if (clip == null) clip = elapsed < 1.25 ? AmeClips.FirstOrDefault() : KangelClips.FirstOrDefault();
-            Image frame = FrameAt(clip, elapsed < 1.25 ? elapsed : elapsed - 1.25);
-            if (frame != null) g.DrawImage(frame, viewport);
-            if (elapsed >= 1.16 && elapsed < 1.43)
-                using (var flash = new SolidBrush(Color.FromArgb((int)(235 * (1 - Math.Abs(elapsed - 1.295) / 0.135)), Color.White))) g.FillRectangle(flash, Desktop.ClientRectangle);
-            using (var pen = new Pen(Color.FromArgb(78, 56, 166), 3)) g.DrawRectangle(pen, viewport);
+            if (TransformationGif == null || TransformationFrameEnds == null) return;
+            int frame = Array.BinarySearch(TransformationFrameEnds, elapsed);
+            if (frame < 0) frame = ~frame;
+            frame = Math.Max(0, Math.Min(TransformationFrameEnds.Length - 1, frame));
+            TransformationGif.SelectActiveFrame(FrameDimension.Time, frame);
+            double scale = Math.Min(Desktop.Width / (double)TransformationGif.Width, Desktop.Height / (double)TransformationGif.Height);
+            int width = Math.Max(1, (int)(TransformationGif.Width * scale));
+            int height = Math.Max(1, (int)(TransformationGif.Height * scale));
+            g.DrawImage(TransformationGif, new Rectangle((Desktop.Width - width) / 2, (Desktop.Height - height) / 2, width, height));
         }
 
         private void PaintLive(object sender, PaintEventArgs e)
@@ -1086,3 +1121,4 @@ namespace NixLanConsole
         private void EndDrag(object sender, MouseEventArgs e) { Dragging = false; }
     }
 }
+

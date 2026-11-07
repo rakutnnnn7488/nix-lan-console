@@ -13,7 +13,7 @@ namespace NixLanConsole
     internal static class AssetBundleSync
     {
         internal const string ManifestSha256 = "D3015414F8082265709B3B7E1B19A4D089C94A9786AC69068967C9CD8F6B0F11";
-        internal const string AssetTreeSha256 = "EF648BCB76990B33E41BE5ECF48B628E7FE82E6646DCB7FB17A08D436504369C";
+        internal const string AssetTreeSha256 = "C6014AC77FAFCCAE1BA8A42B49F588B4878E14456F402B8A6B239FDCA5A56ABF";
         private static readonly object BundleGate = new object();
         internal static string CacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole");
 
@@ -240,3 +240,4 @@ namespace NixLanConsole
         }
     }
 }
+

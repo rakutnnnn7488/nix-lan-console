@@ -8,6 +8,7 @@ namespace NixLanConsole
         DailyNight,
         ListeningToMusic,
         HostOffline,
+        IdleKangel,
         GameOpening,
         LiveGaming,
         LiveGamingFever,
@@ -96,6 +97,10 @@ namespace NixLanConsole
                     return category == RoleAnimationCategory.AmeHappy ? 8 : category == RoleAnimationCategory.AmeNormal ? 2 : 0;
                 case RoleScene.HostOffline:
                     return category == RoleAnimationCategory.AmeAnxiety ? 7 : category == RoleAnimationCategory.AmeIraira ? 3 : 0;
+                case RoleScene.IdleKangel:
+                    return category == RoleAnimationCategory.KangelCalm ? 8 :
+                        category == RoleAnimationCategory.KangelCozy ? 4 :
+                        category == RoleAnimationCategory.KangelCute || category == RoleAnimationCategory.KangelBright ? 2 : 0;
                 case RoleScene.GameOpening:
                     return category == RoleAnimationCategory.KangelCute ? 5 :
                         category == RoleAnimationCategory.KangelBright ? 4 :
@@ -124,17 +129,18 @@ namespace NixLanConsole
 
         internal static bool IsKangel(RoleScene scene)
         {
-            return scene == RoleScene.GameOpening || scene == RoleScene.LiveGaming ||
+            return scene == RoleScene.IdleKangel || scene == RoleScene.GameOpening || scene == RoleScene.LiveGaming ||
                 scene == RoleScene.LiveGamingFever || scene == RoleScene.AfterGame;
         }
 
         internal static RoleScene Resolve(bool online, bool kangel, bool gaming, bool musicPlaying,
-            bool gameOpening, bool highLoad, int localHour)
+            bool gameOpening, bool highLoad, int localHour, bool idleKangel)
         {
-            if (!online) return RoleScene.HostOffline;
-            if (gaming && kangel)
+            if (gaming)
                 return gameOpening ? RoleScene.GameOpening : highLoad ? RoleScene.LiveGamingFever : RoleScene.LiveGaming;
             if (kangel) return RoleScene.AfterGame;
+            if (idleKangel) return RoleScene.IdleKangel;
+            if (!online) return RoleScene.HostOffline;
             if (musicPlaying) return RoleScene.ListeningToMusic;
             return localHour >= 23 || localHour < 6 ? RoleScene.DailyNight : RoleScene.Daily;
         }
@@ -146,6 +152,7 @@ namespace NixLanConsole
                 case RoleScene.DailyNight: return "糖糖 · 深夜待机 ♡";
                 case RoleScene.ListeningToMusic: return "糖糖 · 听歌中 ♡";
                 case RoleScene.HostOffline: return "糖糖 · 等待主机 ♡";
+                case RoleScene.IdleKangel: return "超天酱 · 待机中 ♡";
                 case RoleScene.GameOpening: return "超天酱 · 游戏开场 ♡";
                 case RoleScene.LiveGaming: return "超天酱 · 游戏运行中 ♡";
                 case RoleScene.LiveGamingFever: return "超天酱 · 高能游戏中 ♡";
@@ -155,3 +162,4 @@ namespace NixLanConsole
         }
     }
 }
+

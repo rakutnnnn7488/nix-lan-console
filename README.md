@@ -41,6 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 两台电脑运行同一程序，分别选择“主机”和“副机”；主、副机均有托盘图标。
 - 主机监听 **TCP 46702**。首次配置可在主机管理员 PowerShell 运行 `OpenHostTcpPort.ps1`。副机从“开始 → 设置 → 软件版本”填写主机当前 IPv4 地址。
 - 副机显示主机 CPU、内存、GPU、可读取的温度、最近一分钟曲线，以及按游戏进程记录的时长。主机地址变化后应更新副机设置。
+- 副机“开始 → 设置 → 角色”可在糖糖和超天酱之间选择待机角色；进入任何已追踪游戏都固定为超天酱。若此前显示糖糖，进入游戏时播放本地原生 `game-assets/henshin.gif` 完整变身动画（约 14.7 秒），随后打开直播窗口。游戏结束 10 分钟后恢复所选待机角色。
 - Folia 安装在**主机**。主机程序读取 Folia 自带的 OBS 浏览器源事件，并通过现有 TCP 46702 端口转发歌词与音频数据；副机程序在可拖动的游戏风格窗口中用 Folia 的歌词、时钟与音频事件绘制原创霓虹像素动效。长歌词按字宽缩放、分行，超过两行时随歌词进度分页显示。主机开始播放时自动打开，暂停时保留画面，完全退出 Folia 后约 10 秒关闭。副机无需安装 Folia、运行旧局域网脚本或填写播放器路径。
 - 主机 Folia 的设置中需启用“OBS 浏览器源”；当前版本不会改动 Folia 的配置。副机显示使用系统 Microsoft Edge 的渲染进程，但没有单独的浏览器窗口。
 - Folia 卡片仅显示控制台的游戏风格标题栏；Edge 应用模式自绘的“Folia OBS”标题条会从卡片可见区域裁掉。
@@ -56,6 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\package-local.ps1 -GameAssetsDir 'D:\
 - 更新由应用自己完成：下载并校验 GitHub Release 的 `ControlConsole-update-<版本>.zip`，只解压 `versions\<版本>\`，写 `.complete` 和 `current.txt`/`previous.txt`，再交给启动器重启。
 - 启动器等待旧进程退出，启动新版并检查 `startup-ready.txt`；失败自动回滚 `previous.txt`，删除失败版本并写 `failed-update.txt`（24 小时内不再自动重试）。
 - 不再使用 `Updater.exe` / `ApplyUpdate.ps1`，也不再整目录复制或改名。代码更新包只含程序，不含游戏素材。
+- **1.8.4.0 素材升级：**本地完整安装包新增 `henshin.gif`。先在主机安装此完整包；副机从 GitHub 更新程序后会通过现有局域网连接同步新素材。若主机缺少该文件，程序会直接打开直播窗口并记录诊断日志，待主机补齐素材后即可播放原生变身动画。
 - **迁移顺序：**先用本地完整包装好 1.7.0.0（两台机器各一次），确认后再发布 1.7.1.0（新格式）。1.7.0.0 本身不要上传 GitHub，否则 1.6.x 的旧更新器会失败。
 - 发布前应同步 `version.txt` 与 `BuildInfo.Version`，运行 `Updater` 时代的隔离测试已由新流程取代：构建、`build-installer.ps1 --verify`、`--test-install`/`--test-rollback`、以及本机启动器/更新模拟。
 

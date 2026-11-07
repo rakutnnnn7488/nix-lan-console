@@ -191,6 +191,7 @@ namespace NixLanConsole
     {
         public bool autoUpdate = true;
         public bool hostAutoUpdate = true;
+        public bool idleKangel;
         public string[] excludedGames = new[] { "Wallpaper Engine" };
         public string hostAddress = "192.168.1.7";
         public string foliaExePath = "";
@@ -784,11 +785,12 @@ namespace NixLanConsole
         public string[] excludedGames;
         public bool autoUpdate;
         public bool hostAutoUpdate;
+        public bool idleKangel;
     }
 
     internal static class BuildInfo
     {
-        public const string Version = "1.8.3.3";
+        public const string Version = "1.8.4.0";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
@@ -1519,7 +1521,7 @@ namespace NixLanConsole
                 return LatestReleaseVersionFromWeb(repository);
             }
         }
-        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress)
+        internal static void SaveNativeSettings(bool autoUpdate, bool hostAutoUpdate, IEnumerable<string> excludedGames, string hostAddress, bool idleKangel)
         {
             hostAddress = (hostAddress ?? "").Trim();
             if (hostAddress.Length < 1 || hostAddress.Length > 255 || Uri.CheckHostName(hostAddress) == UriHostNameType.Unknown) throw new ArgumentException("请输入有效的主机 IPv4 地址或计算机名。");
@@ -1528,7 +1530,7 @@ namespace NixLanConsole
             if (names.Count > 256 || names.Any(x => String.IsNullOrWhiteSpace(x) || x.Length > 100)) throw new ArgumentException("游戏排除列表无效");
             lock (Gate)
             {
-                var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, excludedGames = names.ToArray(), hostAddress = hostAddress, gameOverrides = Settings.gameOverrides, reviewedGameKeys = Settings.reviewedGameKeys };
+                var proposed = new ConsoleSettings { autoUpdate = autoUpdate, hostAutoUpdate = hostAutoUpdate, idleKangel = idleKangel, excludedGames = names.ToArray(), hostAddress = hostAddress, foliaExePath = Settings.foliaExePath, gameOverrides = Settings.gameOverrides, reviewedGameKeys = Settings.reviewedGameKeys };
                 File.WriteAllText(SettingsFile, Json.Serialize(proposed), Encoding.UTF8);
                 Settings = proposed;
             }
@@ -1640,7 +1642,7 @@ namespace NixLanConsole
                     ActiveSessions.Clear(); AnyGame = false; ReturnAt = DateTime.UtcNow.AddMinutes(10); MarkSessionsDirty(true);
                     ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(TimeSpan.FromMinutes(10)); lock (Gate) { if (!AnyGame && ReturnAt != DateTime.MinValue && DateTime.UtcNow >= ReturnAt) { Role = "ame"; ReturnAt = DateTime.MinValue; EventId++; } } });
                 }
-                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), foliaKey = online && Last != null ? Last.foliaKey : null, foliaConnected = online && Last != null && Last.foliaConnected, foliaPlaying = online && Last != null && Last.foliaPlaying, foliaRunning = online && Last != null && Last.foliaRunning, foliaSong = online && Last != null ? Last.foliaSong : null, foliaArtist = online && Last != null ? Last.foliaArtist : null, foliaCover = online && Last != null && Last.foliaCover, reviewItems = ReviewItems.Values.OrderByDescending(x => x.seen).Take(100).ToArray(), reviewedGameKeys = (Settings.reviewedGameKeys ?? new string[0]).ToArray(), connectionError = LastTcpError, connectionAttemptUtc = LastConnectionAttemptUtc, connectionSuccessUtc = LastConnectionSuccessUtc, connectionRttMs = LastConnectionRttMs, resolvedAddress = LastResolvedAddress, packetAgeMs = LastSeen == DateTime.MinValue ? -1 : (long)(DateTime.UtcNow - LastSeen).TotalMilliseconds, role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate };
+                return new DashboardState { online = online, host = Last == null ? "等待主机连接" : Last.host, hostAddress = Settings.hostAddress, cpu = !online || Last == null ? -1 : Last.cpu, memoryUsed = !online || Last == null ? 0 : Last.memoryUsed, memoryTotal = !online || Last == null ? 0 : Last.memoryTotal, gpu = !online || Last == null ? -1 : Last.gpu, cpuTemp = !online || Last == null ? -1 : Last.cpuTemp, gpuTemp = !online || Last == null ? -1 : Last.gpuTemp, games = !online ? new string[0] : ActiveSessions.Keys.ToArray(), foliaKey = online && Last != null ? Last.foliaKey : null, foliaConnected = online && Last != null && Last.foliaConnected, foliaPlaying = online && Last != null && Last.foliaPlaying, foliaRunning = online && Last != null && Last.foliaRunning, foliaSong = online && Last != null ? Last.foliaSong : null, foliaArtist = online && Last != null ? Last.foliaArtist : null, foliaCover = online && Last != null && Last.foliaCover, reviewItems = ReviewItems.Values.OrderByDescending(x => x.seen).Take(100).ToArray(), reviewedGameKeys = (Settings.reviewedGameKeys ?? new string[0]).ToArray(), connectionError = LastTcpError, connectionAttemptUtc = LastConnectionAttemptUtc, connectionSuccessUtc = LastConnectionSuccessUtc, connectionRttMs = LastConnectionRttMs, resolvedAddress = LastResolvedAddress, packetAgeMs = LastSeen == DateTime.MinValue ? -1 : (long)(DateTime.UtcNow - LastSeen).TotalMilliseconds, role = Role, roleEvent = EventId, returnInSeconds = ReturnAt == DateTime.MinValue ? 0 : Math.Max(0, (long)(ReturnAt - DateTime.UtcNow).TotalSeconds), sessions = Sessions.Take(1000).Select(s => new GameSession { id = s.id, game = s.game, start = s.start, end = s.end, samples = s.samples }).ToArray(), version = BuildInfo.Version, hostVersion = Last == null ? "—" : Last.version, knownGames = KnownGames.OrderBy(x => x).ToArray(), excludedGames = (Settings.excludedGames ?? new string[0]).ToArray(), autoUpdate = Settings.autoUpdate, hostAutoUpdate = Settings.hostAutoUpdate, idleKangel = Settings.idleKangel };
             }
         }
         private static string SessionFile { get { return Path.Combine(DataDir, "sessions.json"); } }
