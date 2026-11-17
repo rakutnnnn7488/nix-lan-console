@@ -238,6 +238,9 @@ namespace NixLanConsole
         private static DateTime LastTemperatureRead = DateTime.MinValue;
         private static DateTime LastGameConfigRead = DateTime.MinValue;
         private static DateTime LastGameDiscovery = DateTime.MinValue;
+        private static DateTime LastGameScan = DateTime.MinValue;
+        private static string[] CachedGames = new string[0];
+        private static GameDetection[] CachedDetections = new GameDetection[0];
         private static readonly Dictionary<string, string> GameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> CustomGameExecutables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // Only distinctive game process names belong here. Generic engine and launcher names are deliberately absent.
@@ -312,13 +315,13 @@ namespace NixLanConsole
             while (true)
             {
                 double gpu = ReadGpuUsage();
-                if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 5)
+                if ((DateTime.UtcNow - LastTemperatureRead).TotalSeconds >= 15)
                 {
                     ReadTemperatures();
                     LastTemperatureRead = DateTime.UtcNow;
                 }
                 lock (SlowSensorGate) GpuUsage = gpu;
-                Thread.Sleep(2000);
+                Thread.Sleep(5000);
             }
         }
         private static void TcpServerLoop()
@@ -488,6 +491,11 @@ namespace NixLanConsole
         }
         private static string[] ReadGames(out GameDetection[] detections)
         {
+            if ((DateTime.UtcNow - LastGameScan).TotalSeconds < 2)
+            {
+                detections = CachedDetections;
+                return CachedGames;
+            }
             LoadCustomGames();
             if ((DateTime.UtcNow - LastGameDiscovery).TotalMinutes >= 5) DiscoverGames();
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -521,7 +529,10 @@ namespace NixLanConsole
             }
             GameRunning = names.Count > 0;
             detections = found.Values.ToArray();
-            return names.ToArray();
+            CachedGames = names.ToArray();
+            CachedDetections = detections;
+            LastGameScan = DateTime.UtcNow;
+            return CachedGames;
         }
         private static bool TryResolveGame(string path, string processName, out string title, out string source)
         {
@@ -790,7 +801,7 @@ namespace NixLanConsole
 
     internal static class BuildInfo
     {
-        public const string Version = "1.8.4.0";
+        public const string Version = "1.8.5.0";
         // The app lives in <install>\versions\<version>\ControlConsole.exe.
         // Assets, update-source.txt and the launcher are shared at <install>.
         internal static string InstallDir
