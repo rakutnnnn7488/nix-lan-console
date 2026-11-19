@@ -117,8 +117,8 @@ namespace NixLanConsole
         private double ClipStarted;
         private bool IsKangel;
         private string RoleAssetError;
-        private bool Dragging;
-        private Point DragOrigin;
+        private Panel DraggedCard;
+        private Point PendingCardLocation;
         private readonly Dictionary<string, double[]> SavedPositions = new Dictionary<string, double[]>();
         private static string LayoutFile { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NixLanConsole", "ui-layout.json"); } }
 
@@ -315,7 +315,8 @@ namespace NixLanConsole
                 UpdateDisplayedFrame(frame);
                 double now = AnimationClock.Elapsed.TotalSeconds;
                 foreach (var track in MetricTracks) track.Advance(now);
-                AdvanceStreetAnimation(now);
+                if (DraggedCard == null) AdvanceStreetAnimation(now);
+                else ApplyCardDrag();
                 if (Transforming)
                 {
                     if (AnimationClock.Elapsed.TotalSeconds - TransformationStarted >= TransformationDuration) FinishTransformation();
@@ -562,7 +563,7 @@ namespace NixLanConsole
                     }
                 }
             };
-            bool moving = false; Point origin = Point.Empty;
+            Point origin = Point.Empty;
             card.MouseDown += delegate(object sender, MouseEventArgs e)
             {
                 if (e.Button != MouseButtons.Left || e.Y >= 40) return;
@@ -581,17 +582,47 @@ namespace NixLanConsole
                     }
                     return;
                 }
-                moving = true; origin = e.Location; card.Capture = true; FocusCard(card);
+                origin = e.Location; PendingCardLocation = card.Location; DraggedCard = card;
+                card.Capture = true; FocusCard(card);
             };
             card.MouseMove += delegate(object sender, MouseEventArgs e)
             {
-                if (!moving) return;
-                Point next = new Point(Math.Max(0, Math.Min(Desktop.Width - card.Width, card.Left + e.X - origin.X)),
-                    Math.Max(0, Math.Min(Desktop.Height - card.Height, card.Top + e.Y - origin.Y)));
-                if (next != card.Location) card.Location = next;
+                if (DraggedCard != card) return;
+                Point pointer = Desktop.PointToClient(card.PointToScreen(e.Location));
+                PendingCardLocation = new Point(
+                    Math.Max(0, Math.Min(Desktop.ClientSize.Width - card.Width, pointer.X - origin.X)),
+                    Math.Max(0, Math.Min(Desktop.ClientSize.Height - card.Height, pointer.Y - origin.Y)));
             };
-            card.MouseUp += delegate { if (moving) { moving = false; card.Capture = false; RememberPosition(card); SaveLayout(); } };
+            card.MouseUp += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left && DraggedCard == card) card.Capture = false;
+            };
+            card.MouseCaptureChanged += delegate
+            {
+                if (card.Capture || DraggedCard != card) return;
+                if (card.Visible)
+                {
+                    ApplyCardDrag();
+                    RememberPosition(card);
+                    SaveLayout();
+                }
+                DraggedCard = null;
+            };
             return card;
+        }
+
+        private void ApplyCardDrag()
+        {
+            Panel card = DraggedCard;
+            if (card == null || !card.Visible || card.Location == PendingCardLocation) return;
+
+            Rectangle oldBounds = card.Bounds;
+            card.Location = PendingCardLocation;
+            using (var exposed = new Region(oldBounds))
+            {
+                exposed.Exclude(card.Bounds);
+                Desktop.Invalidate(exposed, true);
+            }
         }
 
         // WindowBase.prefab: header x=8, width=window-20; button centers
@@ -1286,8 +1317,5 @@ namespace NixLanConsole
         private static string FormatDuration(long ms) { long mins = ms / 60000; return (mins / 60) + " 小时 " + (mins % 60) + " 分"; }
 
         private static string Temp(double value) { return value >= 0 ? Math.Round(value) + "°C" : "—"; }
-        private void BeginDrag(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { Dragging = true; DragOrigin = e.Location; } }
-        private void ContinueDrag(object sender, MouseEventArgs e) { if (Dragging) { Location = new Point(Left + e.X - DragOrigin.X, Top + e.Y - DragOrigin.Y); } }
-        private void EndDrag(object sender, MouseEventArgs e) { Dragging = false; }
     }
 }
