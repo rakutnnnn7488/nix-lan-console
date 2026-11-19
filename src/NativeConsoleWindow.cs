@@ -80,7 +80,8 @@ namespace NixLanConsole
         private MemoryStream TransformationGifStream;
         private double[] TransformationFrameEnds;
         private double TransformationDuration;
-        private DateTime TransformationStarted;
+        private readonly System.Diagnostics.Stopwatch AnimationClock = System.Diagnostics.Stopwatch.StartNew();
+        private double TransformationStarted;
         private bool Transforming;
         private bool PreviousGameRunning;
         private DateTime GameStartedAtUtc = DateTime.MinValue;
@@ -109,7 +110,7 @@ namespace NixLanConsole
         private RoleClip PreviousClip;
         private RoleScene CurrentScene;
         private Image DisplayedFrame;
-        private DateTime ClipStarted;
+        private double ClipStarted;
         private bool IsKangel;
         private string RoleAssetError;
         private bool Dragging;
@@ -301,19 +302,19 @@ namespace NixLanConsole
             RefreshTimer = new Timer { Interval = 1000 };
             RefreshTimer.Tick += delegate { RefreshData(); };
             LoadRoleAssets();
-            AnimationTimer = new Timer { Interval = 83 };
+            AnimationTimer = new Timer { Interval = 33 };
             AnimationTimer.Tick += delegate
             {
-                if (CurrentClip != null && (DateTime.UtcNow - ClipStarted).TotalSeconds >=
+                if (CurrentClip != null && AnimationClock.Elapsed.TotalSeconds - ClipStarted >=
                     Math.Max(CurrentClip.Duration, IsKangel ? 2.5 : 0)) SelectRoleClip(CurrentScene);
                 Image frame = CurrentFrame();
-                if (!Object.ReferenceEquals(frame, DisplayedFrame)) { DisplayedFrame = frame; CharacterCanvas.Invalidate(); }
+                UpdateDisplayedFrame(frame);
                 if (Transforming)
                 {
-                    if ((DateTime.UtcNow - TransformationStarted).TotalSeconds >= TransformationDuration) FinishTransformation();
+                    if (AnimationClock.Elapsed.TotalSeconds - TransformationStarted >= TransformationDuration) FinishTransformation();
                     else TransitionOverlay.Invalidate();
                 }
-                else if (LiveCard.Visible) LiveCanvas.Invalidate();
+
             };
             VisibleChanged += delegate { UpdateUiTimers(); };
             Shown += delegate { UpdateUiTimers(); };
@@ -650,7 +651,12 @@ namespace NixLanConsole
             CharacterState.Text = RoleAnimationCatalog.Caption(nextScene);
             TaskbarStatus.Text = (state.online ? "● 主机在线" : "○ 主机离线") + "  ·  " + (RoleAnimationCatalog.IsKangel(nextScene) ? "超天酱" : "糖糖");
             if (nextScene != CurrentScene || CurrentClip == null) SelectRoleClip(nextScene);
-            LiveGameName = playing ? state.games[0] : "";
+            string gameName = playing ? state.games[0] : "";
+            if (LiveGameName != gameName)
+            {
+                LiveGameName = gameName;
+                if (LiveCard.Visible) LiveCanvas.Invalidate();
+            }
             if (playing && !PreviousGameRunning)
             {
                 if (!wasKangel) StartTransformation();
@@ -678,7 +684,6 @@ namespace NixLanConsole
                 }
             }
             else FoliaExitedAtUtc = DateTime.MinValue;
-            if (LiveCard.Visible) LiveCanvas.Invalidate();
             var latestFinished = (state.sessions ?? new GameSession[0]).Where(s => s != null && s.end > s.start && !String.Equals(s.game, "Wallpaper Engine", StringComparison.OrdinalIgnoreCase)).OrderByDescending(s => s.end).FirstOrDefault();
             LatestRecap = latestFinished;
             RecapSparkline.Visible = latestFinished != null && latestFinished.samples != null && latestFinished.samples.Length > 1;
@@ -922,7 +927,7 @@ namespace NixLanConsole
                 return;
             }
             Transforming = true;
-            TransformationStarted = DateTime.UtcNow;
+            TransformationStarted = AnimationClock.Elapsed.TotalSeconds;
             LiveCard.Visible = false;
             TransitionOverlay.Visible = true;
             TransitionOverlay.BringToFront();
@@ -946,7 +951,7 @@ namespace NixLanConsole
             g.Clear(Color.Black);
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            double elapsed = Math.Max(0, (DateTime.UtcNow - TransformationStarted).TotalSeconds);
+            double elapsed = Math.Max(0, AnimationClock.Elapsed.TotalSeconds - TransformationStarted);
             if (TransformationGif == null || TransformationFrameEnds == null) return;
             int frame = Array.BinarySearch(TransformationFrameEnds, elapsed);
             if (frame < 0) frame = ~frame;
@@ -956,6 +961,12 @@ namespace NixLanConsole
             int width = Math.Max(1, (int)(TransformationGif.Width * scale));
             int height = Math.Max(1, (int)(TransformationGif.Height * scale));
             g.DrawImage(TransformationGif, new Rectangle((Desktop.Width - width) / 2, (Desktop.Height - height) / 2, width, height));
+        }
+
+        private static Rectangle LiveVideoBounds(Rectangle area)
+        {
+            return new Rectangle(60 * area.Width / 1382, 90 * area.Height / 890,
+                Math.Max(1, 696 * area.Width / 1382), Math.Max(1, 454 * area.Height / 890));
         }
 
         private void PaintLive(object sender, PaintEventArgs e)
@@ -969,10 +980,10 @@ namespace NixLanConsole
             else g.Clear(Color.FromArgb(255, 248, 255));
             double sx = area.Width / 1382.0, sy = area.Height / 890.0;
             Func<int, int, int, int, Rectangle> rect = (x, y, w, h) => new Rectangle((int)(x * sx), (int)(y * sy), Math.Max(1, (int)(w * sx)), Math.Max(1, (int)(h * sy)));
-            var video = rect(60, 90, 696, 454);
+            var video = LiveVideoBounds(area);
             if (CharacterBackground != null) g.DrawImage(CharacterBackground, video);
-            Image frame = CurrentFrame();
-            if (frame != null) g.DrawImage(frame, video);
+            if (DisplayedFrame != null) g.DrawImage(DisplayedFrame, video);
+            if (video.Contains(e.ClipRectangle)) return;
             using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 12F) : new Font(PixelText.FontFamily, 18, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var ink = new SolidBrush(Color.FromArgb(69, 53, 153)))
             {
@@ -998,7 +1009,7 @@ namespace NixLanConsole
         private static Image FrameAt(RoleClip clip, double elapsed)
         {
             if (clip == null || clip.Frames.Count == 0 || clip.Duration <= 0) return null;
-            double position = elapsed % clip.Duration;
+            double position = Math.Max(0, Math.Min(elapsed, clip.Duration));
             RoleFrame selected = clip.Frames[0];
             foreach (var frame in clip.Frames) { if (frame.Time > position) break; selected = frame; }
             return selected.Image;
@@ -1028,9 +1039,16 @@ namespace NixLanConsole
             }
             PreviousClip = CurrentClip;
             CurrentClip = next;
-            ClipStarted = DateTime.UtcNow;
-            DisplayedFrame = CurrentFrame();
-            CharacterCanvas.Invalidate();
+            ClipStarted = AnimationClock.Elapsed.TotalSeconds;
+            UpdateDisplayedFrame(CurrentFrame());
+        }
+
+        private void UpdateDisplayedFrame(Image frame)
+        {
+            if (Object.ReferenceEquals(frame, DisplayedFrame)) return;
+            DisplayedFrame = frame;
+            if (CharacterCanvas.Visible && !Transforming) CharacterCanvas.Invalidate();
+            if (LiveCanvas.Visible) LiveCanvas.Invalidate(LiveVideoBounds(LiveCanvas.ClientRectangle));
         }
 
         private void PaintCharacter(object sender, PaintEventArgs e)
@@ -1039,7 +1057,7 @@ namespace NixLanConsole
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
             if (CharacterBackground != null) e.Graphics.DrawImage(CharacterBackground, bounds, new Rectangle(Point.Empty, CharacterBackground.Size), GraphicsUnit.Pixel);
-            Image image = CurrentFrame();
+            Image image = DisplayedFrame;
             if (image != null && bounds.Width > 0 && bounds.Height > 0)
             {
                 e.Graphics.DrawImage(image, bounds, new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
@@ -1053,7 +1071,7 @@ namespace NixLanConsole
 
         private Image CurrentFrame()
         {
-            return FrameAt(CurrentClip, (DateTime.UtcNow - ClipStarted).TotalSeconds);
+            return FrameAt(CurrentClip, AnimationClock.Elapsed.TotalSeconds - ClipStarted);
         }
 
         private sealed class RoleClip { public string Name; public RoleAnimationCategory Category; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
@@ -1121,4 +1139,3 @@ namespace NixLanConsole
         private void EndDrag(object sender, MouseEventArgs e) { Dragging = false; }
     }
 }
-
