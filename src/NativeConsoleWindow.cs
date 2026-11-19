@@ -63,6 +63,9 @@ namespace NixLanConsole
         private readonly Random Randomizer = new Random();
         private Image CharacterBackground;
         private Image SideBackground;
+        private Image DayStreet;
+        private Image EveningStreet;
+        private Image NightStreet;
         private Image DesktopBackground;
         private Image DesktopFullBackground;
         private Bitmap DesktopPaintCache;
@@ -328,7 +331,9 @@ namespace NixLanConsole
                 if (FoliaCover.Image != null && FoliaCover.Image != FoliaDefaultCover) FoliaCover.Image.Dispose();
                 FoliaDefaultCover.Dispose();
                 if (CharacterBackground != null) CharacterBackground.Dispose();
-                if (SideBackground != null) SideBackground.Dispose();
+                if (DayStreet != null) DayStreet.Dispose();
+                if (EveningStreet != null) EveningStreet.Dispose();
+                if (NightStreet != null) NightStreet.Dispose();
                 if (DesktopBackground != null) DesktopBackground.Dispose();
                 if (DesktopFullBackground != null) DesktopFullBackground.Dispose();
                 if (DesktopPaintCache != null) DesktopPaintCache.Dispose();
@@ -441,6 +446,18 @@ namespace NixLanConsole
             icon.Click += delegate { action(); };
             Desktop.Controls.Add(icon);
             ShortcutControls.Add(icon);
+        }
+
+        private void UpdateStreetScene(int hour, bool playing)
+        {
+            Image preferred = playing || hour < 6 || hour >= 20
+                ? NightStreet
+                : hour >= 17 ? EveningStreet : DayStreet;
+            Image next = preferred ?? DayStreet ?? EveningStreet ?? NightStreet;
+            if (ReferenceEquals(next, SideBackground)) return;
+            SideBackground = next;
+            Rail.Invalidate();
+            RightRail.Invalidate();
         }
 
         private void PaintLeftRail(object sender, PaintEventArgs e)
@@ -646,6 +663,7 @@ namespace NixLanConsole
             Samples.Add(new[] { values[0], values[1], values[2] }); if (Samples.Count > 60) Samples.RemoveAt(0); Chart.Invalidate();
             bool kangel = state.role == "kangel" || state.role == "transform";
             bool playing = state.games != null && state.games.Length > 0;
+            UpdateStreetScene(DateTime.Now.Hour, playing);
             bool wasKangel = IsKangel;
             if (playing && !PreviousGameRunning) GameStartedAtUtc = DateTime.UtcNow;
             if (playing && state.online)
@@ -838,7 +856,9 @@ namespace NixLanConsole
                 }
                 catch (Exception ex) { StartupDiagnostics.Write("optional interface font: " + ex.Message); }
                 if (File.Exists(Path.Combine(assets, "bg_stream_native.png"))) CharacterBackground = LoadDetachedImage(Path.Combine(assets, "bg_stream_native.png"));
-                if (File.Exists(Path.Combine(assets, "sidebar_noon.png"))) SideBackground = LoadDetachedImage(Path.Combine(assets, "sidebar_noon.png"));
+                DayStreet = LoadStreetBackground(assets, "sidebar_noon.png");
+                EveningStreet = LoadStreetBackground(assets, "sidebar_evening.png");
+                NightStreet = LoadStreetBackground(assets, "sidebar_night.png");
                 if (File.Exists(Path.Combine(assets, "desktop_wallpaper.png"))) DesktopBackground = LoadDetachedImage(Path.Combine(assets, "desktop_wallpaper.png"));
                 if (File.Exists(Path.Combine(assets, "desktop_full_original.png"))) DesktopFullBackground = LoadDetachedImage(Path.Combine(assets, "desktop_full_original.png"));
                 RebuildDesktopPaintCache();
@@ -897,6 +917,18 @@ namespace NixLanConsole
             }
             catch (Exception ex) { RoleAssetError = ex.ToString(); }
             CharacterCanvas.Invalidate();
+        }
+
+        private static Image LoadStreetBackground(string directory, string name)
+        {
+            string path = Path.Combine(directory, name);
+            if (!File.Exists(path)) return null;
+            try { return LoadDetachedImage(path); }
+            catch (Exception ex)
+            {
+                StartupDiagnostics.Write("street background " + name + ": " + ex.Message);
+                return null;
+            }
         }
 
         private static Image LoadDetachedImage(string path)
