@@ -20,7 +20,7 @@ namespace NixLanConsole
         private readonly Label CharacterState;
         private readonly Label[] MetricValues = new Label[4];
         private readonly Label[] MetricNames = new Label[4];
-        private readonly Panel[] MetricFills = new Panel[4];
+        private readonly MetricTrack[] MetricTracks = new MetricTrack[4];
         private readonly PictureBox[] MetricIcons = new PictureBox[4];
         private readonly List<Image> MetricIconImages = new List<Image>();
         private readonly Label GameList;
@@ -183,8 +183,8 @@ namespace NixLanConsole
                 MetricValues[i] = new Label { Text = "—", Location = new Point(51, 18), Size = new Size(155, 25), TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(59, 50, 145), Font = new Font("Consolas", 13F, FontStyle.Bold) };
                 var name = new Label { Text = metricNames[i], Location = new Point(51, 0), Size = new Size(160, 19), TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(97, 165, 192), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
                 MetricNames[i] = name;
-                var track = new Panel { Height = 22, BackColor = Color.FromArgb(218, 191, 230), BorderStyle = BorderStyle.FixedSingle };
-                MetricFills[i] = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = Color.FromArgb(105, 179, 211) }; track.Controls.Add(MetricFills[i]);
+                var track = new MetricTrack { Height = 22 };
+                MetricTracks[i] = track;
                 row.Controls.Add(MetricIcons[i]); row.Controls.Add(name); row.Controls.Add(MetricValues[i]); row.Controls.Add(track);
                 row.Resize += delegate
                 {
@@ -309,6 +309,8 @@ namespace NixLanConsole
                     Math.Max(CurrentClip.Duration, IsKangel ? 2.5 : 0)) SelectRoleClip(CurrentScene);
                 Image frame = CurrentFrame();
                 UpdateDisplayedFrame(frame);
+                double now = AnimationClock.Elapsed.TotalSeconds;
+                foreach (var track in MetricTracks) track.Advance(now);
                 if (Transforming)
                 {
                     if (AnimationClock.Elapsed.TotalSeconds - TransformationStarted >= TransformationDuration) FinishTransformation();
@@ -417,6 +419,13 @@ namespace NixLanConsole
         private void AddDesktopIcon(string label, string assetName, int x, int y, Action action)
         {
             var icon = new BufferedPanel { Tag = assetName, Size = new Size(88, 98), Location = new Point(x, y), BackColor = Color.Transparent, Cursor = Cursors.Hand };
+            bool hovered = false;
+            bool pressed = false;
+            icon.MouseEnter += delegate { hovered = true; icon.Invalidate(); };
+            icon.MouseLeave += delegate { hovered = pressed = false; icon.Invalidate(); };
+            icon.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { pressed = true; icon.Invalidate(); } };
+            icon.MouseUp += delegate { pressed = false; icon.Invalidate(); };
+            icon.MouseCaptureChanged += delegate { if (pressed) { pressed = false; icon.Invalidate(); } };
             icon.Paint += delegate(object sender, PaintEventArgs e)
             {
                 Image image;
@@ -424,10 +433,10 @@ namespace NixLanConsole
                 {
                     e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                     int side = Math.Min(64, (int)(icon.Width * 0.73));
-                    e.Graphics.DrawImage(image, new Rectangle((icon.Width - side) / 2, 0, side, side), new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
+                    e.Graphics.DrawImage(image, new Rectangle((icon.Width - side) / 2, pressed ? 2 : 0, side, side), new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
                 }
                 using (var font = PixelText == null ? new Font("Microsoft YaHei UI", 10F, FontStyle.Bold) : new Font(PixelText.FontFamily, 16, FontStyle.Regular, GraphicsUnit.Pixel))
-                    TextRenderer.DrawText(e.Graphics, label, font, new Rectangle(0, Math.Min(64, (int)(icon.Width * 0.73)) + 4, icon.Width, 26), Color.FromArgb(63, 47, 144), TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine);
+                    TextRenderer.DrawText(e.Graphics, label, font, new Rectangle(0, Math.Min(64, (int)(icon.Width * 0.73)) + 4, icon.Width, 26), (hovered ? Color.FromArgb(126, 69, 171) : Color.FromArgb(63, 47, 144)), TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine);
             };
             icon.Click += delegate { action(); };
             Desktop.Controls.Add(icon);
@@ -631,8 +640,9 @@ namespace NixLanConsole
             MetricValues[2].Text = state.online && state.gpu >= 0 ? Math.Round(state.gpu) + "%" : "—";
             MetricValues[3].Text = state.online ? Temp(state.cpuTemp) + " / " + Temp(state.gpuTemp) : "—";
             double[] values = { state.cpu, state.online && state.memoryTotal > 0 ? state.memoryUsed / state.memoryTotal * 100 : -1, state.gpu, -1 };
-            for (int i = 0; i < 3; i++) MetricFills[i].Width = (int)(MetricFills[i].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, values[i])) / 100.0);
-            MetricFills[3].Width = (int)(MetricFills[3].Parent.ClientSize.Width * Math.Max(0, Math.Min(100, Math.Max(state.cpuTemp, state.gpuTemp))) / 100.0);
+            double now = AnimationClock.Elapsed.TotalSeconds;
+            for (int i = 0; i < 3; i++) MetricTracks[i].SetReading(values[i], now);
+            MetricTracks[3].SetReading(state.online ? Math.Max(state.cpuTemp, state.gpuTemp) : -1, now);
             Samples.Add(new[] { values[0], values[1], values[2] }); if (Samples.Count > 60) Samples.RemoveAt(0); Chart.Invalidate();
             bool kangel = state.role == "kangel" || state.role == "transform";
             bool playing = state.games != null && state.games.Length > 0;
@@ -1077,7 +1087,62 @@ namespace NixLanConsole
         private sealed class RoleClip { public string Name; public RoleAnimationCategory Category; public double Duration; public readonly List<RoleFrame> Frames = new List<RoleFrame>(); }
         private sealed class RoleFrame { public double Time; public Image Image; }
 
-        private sealed class BufferedPanel : Panel
+        private sealed class MetricTrack : BufferedPanel
+        {
+            private double start, target, displayed, startedAt;
+
+            public MetricTrack()
+            {
+                BackColor = Color.FromArgb(218, 191, 230);
+                BorderStyle = BorderStyle.FixedSingle;
+                SetStyle(ControlStyles.ResizeRedraw, true);
+            }
+
+            public void SetReading(double reading, double now)
+            {
+                double next = Math.Max(0, Math.Min(100, reading));
+                if (reading < 0)
+                {
+                    target = start = 0;
+                    SetDisplayed(0);
+                    return;
+                }
+                if (next == target) return;
+                Advance(now);
+                start = displayed;
+                target = next;
+                startedAt = now;
+            }
+
+            public void Advance(double now)
+            {
+                if (!Visible || displayed == target) return;
+                double remaining = 1 - Math.Min(1, (now - startedAt) / 0.32);
+                SetDisplayed(remaining <= 0 ? target : target + (start - target) * remaining * remaining * remaining);
+            }
+
+            private int FillWidth(double reading)
+            {
+                return (int)Math.Round(ClientSize.Width * reading / 100);
+            }
+
+            private void SetDisplayed(double value)
+            {
+                int before = FillWidth(displayed);
+                int after = FillWidth(value);
+                displayed = value;
+                if (before != after && Visible)
+                    Invalidate(new Rectangle(Math.Min(before, after), 0, Math.Abs(before - after), ClientSize.Height));
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                using (var fill = new SolidBrush(Color.FromArgb(105, 179, 211)))
+                    e.Graphics.FillRectangle(fill, 0, 0, FillWidth(displayed), ClientSize.Height);
+            }
+        }
+
+        private class BufferedPanel : Panel
         {
             public BufferedPanel()
             {
@@ -1123,9 +1188,10 @@ namespace NixLanConsole
                     for (int i = 0; i < Samples.Count; i++)
                     {
                         double value = Samples[i][series]; if (value < 0) { previous = null; continue; }
-                        int x = 8 + i * (rect.Width - 16) / 59;
+                        int x = rect.Width - 8 - (Samples.Count - 1 - i) * (rect.Width - 16) / 59;
                         int y = rect.Height - 6 - (int)(Math.Max(0, Math.Min(100, value)) * (rect.Height - 24) / 100);
                         var point = new Point(x, y); if (previous.HasValue) e.Graphics.DrawLine(pen, previous.Value, point); previous = point;
+                        if (i == Samples.Count - 1) e.Graphics.DrawRectangle(pen, x - 2, y - 2, 4, 4);
                     }
                 }
             }
