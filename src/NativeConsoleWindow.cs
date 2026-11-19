@@ -63,6 +63,7 @@ namespace NixLanConsole
         private readonly Random Randomizer = new Random();
         private Image CharacterBackground;
         private Image SideBackground;
+        private int StreetFrame = -1;
         private Image DayStreet;
         private Image EveningStreet;
         private Image NightStreet;
@@ -314,6 +315,7 @@ namespace NixLanConsole
                 UpdateDisplayedFrame(frame);
                 double now = AnimationClock.Elapsed.TotalSeconds;
                 foreach (var track in MetricTracks) track.Advance(now);
+                AdvanceStreetAnimation(now);
                 if (Transforming)
                 {
                     if (AnimationClock.Elapsed.TotalSeconds - TransformationStarted >= TransformationDuration) FinishTransformation();
@@ -460,6 +462,56 @@ namespace NixLanConsole
             RightRail.Invalidate();
         }
 
+        private void AdvanceStreetAnimation(double now)
+        {
+            int frame = (int)(now * 8 % 8192);
+            if (SideBackground == null || frame == StreetFrame) return;
+            InvalidateStreetLights(Rail, StreetFrame, frame, 0);
+            InvalidateStreetLights(RightRail, StreetFrame, frame, 53);
+            StreetFrame = frame;
+        }
+
+        private static void InvalidateStreetLights(Panel rail, int before, int after, int offset)
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                Rectangle next = StreetLightBounds(rail.ClientSize, after + offset, i);
+                if (before >= 0)
+                {
+                    Rectangle previous = StreetLightBounds(rail.ClientSize, before + offset, i);
+                    if (previous == next) continue;
+                    rail.Invalidate(previous);
+                }
+                rail.Invalidate(next);
+            }
+        }
+
+        private static Rectangle StreetLightBounds(Size size, int frame, int index)
+        {
+            int travel = Math.Max(1, size.Width - 32);
+            int x = 12 + (frame + index * 47) % travel;
+            int y = size.Height * (15 + index * 13) / 100 + (int)(Math.Sin((frame + index * 19) / 14.0) * 9);
+            int length = 8 + index % 3 * 4;
+            return new Rectangle(x, y, length, 5);
+        }
+
+        private void PaintStreetLights(Graphics graphics, Rectangle clip, Size size, int offset)
+        {
+            if (StreetFrame < 0) return;
+            bool night = SideBackground == NightStreet;
+            using (var glow = new SolidBrush(night ? Color.FromArgb(135, 157, 226, 255) : Color.FromArgb(155, 250, 240, 255)))
+            using (var core = new SolidBrush(night ? Color.FromArgb(220, 251, 210, 255) : Color.FromArgb(225, 255, 252, 233)))
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    Rectangle light = StreetLightBounds(size, StreetFrame + offset, i);
+                    if (!clip.IntersectsWith(light)) continue;
+                    graphics.FillRectangle(glow, light.X, light.Y + 2, light.Width, 2);
+                    graphics.FillRectangle(core, light.Right - 4, light.Y, 2, 5);
+                }
+            }
+        }
+
         private void PaintLeftRail(object sender, PaintEventArgs e)
         {
             if (SideBackground != null)
@@ -467,6 +519,7 @@ namespace NixLanConsole
                 e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                 e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
                 e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, Rail.Width, Rail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
+                PaintStreetLights(e.Graphics, e.ClipRectangle, Rail.ClientSize, 0);
             }
         }
 
@@ -479,6 +532,7 @@ namespace NixLanConsole
             e.Graphics.ScaleTransform(-1, 1);
             e.Graphics.DrawImage(SideBackground, new Rectangle(2, 0, RightRail.Width, RightRail.Height), new Rectangle(Point.Empty, SideBackground.Size), GraphicsUnit.Pixel);
             e.Graphics.ResetTransform();
+            PaintStreetLights(e.Graphics, e.ClipRectangle, RightRail.ClientSize, 53);
         }
 
         private Panel Card(string title, int width)
